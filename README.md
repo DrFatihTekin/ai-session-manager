@@ -22,6 +22,16 @@ Today it supports:
 | `gemini` | After first run, launches `gemini --resume` in the same project |
 | `codex` | After first run, launches `codex resume --last` in the same project |
 
+Project-scoped state lives in:
+
+- `.git/ai-session-manager/` inside git repos
+- `.ai-session-manager/` inside plain folders
+
+Copilot legacy state is still recognized and migrated from:
+
+- `.git/copilot-session`
+- `.copilot-session`
+
 ---
 
 ## Requirements
@@ -34,25 +44,26 @@ Today it supports:
 ## Installation
 
 ```bash
-# Clone or copy the project, then install
 pip install --editable ~/ai-session-manager
 ```
 
-Once published to PyPI:
+Once published:
 
 ```bash
 pip install ai-session-manager
 ```
 
-### One-time setup
+---
 
-After installing the package, run setup once to activate wrappers for the tools you use:
+## Setup
+
+Install wrappers for every supported tool found in `PATH`:
 
 ```bash
 ai-session-manager setup
 ```
 
-You can also target specific tools:
+Or target specific tools:
 
 ```bash
 ai-session-manager setup agy copilot claude gemini codex
@@ -64,18 +75,21 @@ Each selected binary is renamed to `<tool>-real` and replaced with a thin Python
 
 ## Usage
 
+### Copilot
+
 ```bash
-# First run in a repo or plain folder
 cd ~/my-project
 copilot
 # [ai-session-manager] New session 4f1a2b3c-... (my-project)
 
-# Later — Copilot resumes the exact same UUID-backed session
 cd ~/my-project
 copilot
 # [ai-session-manager] Resuming session 4f1a2b3c-... (my-project)
+```
 
-# AGY / Claude / Gemini / Codex use their own native latest-session resume flows
+### AGY / Claude / Gemini / Codex
+
+```bash
 agy
 # [ai-session-manager] Starting new Antigravity CLI session (my-project)
 agy
@@ -121,6 +135,10 @@ Or reset one tool only:
 ai-session-manager reset claude
 ```
 
+Legacy alias:
+
+- `copilot-session <command>` still works and is routed to the Copilot subset of `ai-session-manager`
+
 ---
 
 ## Commands
@@ -134,14 +152,27 @@ ai-session-manager reset claude
 
 ---
 
-## How it works
+## State layout
 
-`ai-session-manager` keeps wrapper state in:
+```text
+git repo:
+  .git/ai-session-manager/
+    copilot.json
+    claude.json
+    codex.json
+    gemini.json
+    agy.json
 
-- `.git/ai-session-manager/<tool>.json` inside git repos
-- `.ai-session-manager/<tool>.json` inside plain folders
+plain folder:
+  .ai-session-manager/
+    copilot.json
+    claude.json
+    codex.json
+    gemini.json
+    agy.json
+```
 
-Copilot stores a generated UUID in that state file. The other tools use the file as an on/off marker that tells the wrapper to invoke the tool's native resume-latest behavior on future launches.
+Copilot stores a generated UUID in its state file. The other tools use the file as an on/off marker that tells the wrapper to invoke the tool's native resume-latest behavior on future launches.
 
 ### Platform details
 
@@ -153,13 +184,17 @@ Copilot stores a generated UUID in that state file. The other tools use the file
 
 ### Project structure
 
-```
+```text
 ai-session-manager/
 ├── pyproject.toml
 ├── README.md
-└── src/ai_session_manager/
-    ├── wrapper.py   # core session logic (cross-platform)
-    └── cli.py       # ai-session-manager management commands
+└── src/
+    ├── ai_session_manager/
+    │   ├── wrapper.py
+    │   └── cli.py
+    └── copilot_session/
+        ├── wrapper.py
+        └── cli.py
 ```
 
 ---
