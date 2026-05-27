@@ -13,7 +13,6 @@ keywords = ["ai", "cli", "session", "wrapper", "copilot", "claude", "codex", "ge
 
 [project.scripts]
 ai-session-manager = "ai_session_manager.cli:main"
-copilot-session = "copilot_session.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

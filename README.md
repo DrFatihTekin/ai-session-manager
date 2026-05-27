@@ -135,10 +135,6 @@ Or reset one tool only:
 ai-session-manager reset claude
 ```
 
-Legacy alias:
-
-- `copilot-session <command>` still works and is routed to the Copilot subset of `ai-session-manager`
-
 ---
 
 ## Commands
@@ -192,9 +188,6 @@ ai-session-manager/
     ├── ai_session_manager/
     │   ├── wrapper.py
     │   └── cli.py
-    └── copilot_session/
-        ├── wrapper.py
-        └── cli.py
 ```
 
 ---
