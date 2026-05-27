@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "copilot-session"
+version = "0.1.0"
+description = "Per-repo session persistence for GitHub Copilot CLI"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = ["copilot", "github", "session", "cli"]
+
+[project.scripts]
+copilot-session = "copilot_session.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,10 @@
+README.md
+pyproject.toml
+src/copilot_session/__init__.py
+src/copilot_session/cli.py
+src/copilot_session/wrapper.py
+src/copilot_session.egg-info/PKG-INFO
+src/copilot_session.egg-info/SOURCES.txt
+src/copilot_session.egg-info/dependency_links.txt
+src/copilot_session.egg-info/entry_points.txt
+src/copilot_session.egg-info/top_level.txt

@@ -1,0 +1,2 @@
+[console_scripts]
+copilot-session = copilot_session.cli:main
