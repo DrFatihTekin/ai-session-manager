@@ -8,48 +8,119 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from copilot_session import wrapper
+from ai_session_manager import wrapper
 
 
 class SessionTargetTests(unittest.TestCase):
-    def test_git_repo_uses_git_directory_session_file(self) -> None:
+    def test_git_repo_uses_state_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             repo_dir = Path(tmp_dir)
             subprocess.run(["git", "init", "-q"], cwd=repo_dir, check=True)
 
-            scope_dir, session_file, scope_kind = wrapper._session_target(repo_dir)
+            scope_dir, state_file, scope_kind = wrapper._state_file("copilot", repo_dir)
 
             self.assertEqual(scope_kind, "repo")
             self.assertEqual(scope_dir, repo_dir.resolve())
-            self.assertEqual(session_file, repo_dir.resolve() / ".git" / wrapper.REPO_SESSION_FILE)
+            self.assertEqual(
+                state_file,
+                repo_dir.resolve() / ".git" / wrapper.STATE_DIR_NAME / "copilot.json",
+            )
 
-    def test_plain_folder_uses_hidden_session_file(self) -> None:
+    def test_plain_folder_uses_hidden_state_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             folder_dir = Path(tmp_dir)
 
-            scope_dir, session_file, scope_kind = wrapper._session_target(folder_dir)
+            scope_dir, state_file, scope_kind = wrapper._state_file("gemini", folder_dir)
 
             self.assertEqual(scope_kind, "folder")
             self.assertEqual(scope_dir, folder_dir.resolve())
-            self.assertEqual(session_file, folder_dir.resolve() / wrapper.FOLDER_SESSION_FILE)
+            self.assertEqual(
+                state_file,
+                folder_dir.resolve() / f".{wrapper.STATE_DIR_NAME}" / "gemini.json",
+            )
 
-    def test_run_creates_folder_session_outside_git(self) -> None:
+    def test_copilot_migrates_legacy_state_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            folder_dir = Path(tmp_dir)
+            legacy_path = folder_dir / wrapper.LEGACY_FOLDER_SESSION_FILE
+            legacy_path.write_text("legacy-session-id")
+
+            state = wrapper._load_state(wrapper.get_tool("copilot"), folder_dir)
+
+            self.assertEqual(state["resume_target"], "legacy-session-id")
+            _, state_path, _ = wrapper._state_file("copilot", folder_dir)
+            self.assertTrue(state_path.exists())
+
+    def test_copilot_run_creates_managed_session_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             folder_dir = Path(tmp_dir)
             stdout = StringIO()
 
-            with patch("copilot_session.wrapper.Path.cwd", return_value=folder_dir):
-                with patch("copilot_session.wrapper._find_real_copilot", return_value="copilot-real"):
-                    with patch("copilot_session.wrapper._exec") as exec_mock:
-                        with patch("copilot_session.wrapper.sys.argv", ["copilot"]):
+            with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
+                with patch("ai_session_manager.wrapper._find_real_binary", return_value="copilot-real"):
+                    with patch("ai_session_manager.wrapper._exec") as exec_mock:
+                        with patch("ai_session_manager.wrapper.sys.argv", ["copilot"]):
                             with redirect_stdout(stdout):
-                                wrapper.run()
+                                wrapper.run("copilot")
 
-            session_id = (folder_dir / wrapper.FOLDER_SESSION_FILE).read_text().strip()
-            self.assertTrue(session_id)
+            _, state_path, _ = wrapper._state_file("copilot", folder_dir)
+            session_id = wrapper.json.loads(state_path.read_text())["resume_target"]
             exec_mock.assert_called_once_with("copilot-real", ["--session-id", session_id])
-            self.assertIn("[copilot-session] New session", stdout.getvalue())
+            self.assertIn("[ai-session-manager] New session", stdout.getvalue())
 
+    def test_gemini_resumes_after_first_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            folder_dir = Path(tmp_dir)
+
+            with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
+                with patch("ai_session_manager.wrapper._find_real_binary", return_value="gemini-real"):
+                    with patch("ai_session_manager.wrapper._exec") as exec_mock:
+                        with patch("ai_session_manager.wrapper.sys.argv", ["gemini"]):
+                            wrapper.run("gemini")
+
+            exec_mock.assert_called_once_with("gemini-real", [])
+
+            with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
+                with patch("ai_session_manager.wrapper._find_real_binary", return_value="gemini-real"):
+                    with patch("ai_session_manager.wrapper._exec") as exec_mock:
+                        with patch("ai_session_manager.wrapper.sys.argv", ["gemini"]):
+                            wrapper.run("gemini")
+
+            exec_mock.assert_called_once_with("gemini-real", ["--resume"])
+
+    def test_agy_resumes_after_first_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            folder_dir = Path(tmp_dir)
+
+            with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
+                with patch("ai_session_manager.wrapper._find_real_binary", return_value="agy-real"):
+                    with patch("ai_session_manager.wrapper._exec") as exec_mock:
+                        with patch("ai_session_manager.wrapper.sys.argv", ["agy"]):
+                            wrapper.run("agy")
+
+            exec_mock.assert_called_once_with("agy-real", [])
+
+            with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
+                with patch("ai_session_manager.wrapper._find_real_binary", return_value="agy-real"):
+                    with patch("ai_session_manager.wrapper._exec") as exec_mock:
+                        with patch("ai_session_manager.wrapper.sys.argv", ["agy"]):
+                            wrapper.run("agy")
+
+            exec_mock.assert_called_once_with("agy-real", ["-c"])
+
+    def test_codex_bypasses_explicit_subcommands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            folder_dir = Path(tmp_dir)
+
+            with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
+                with patch("ai_session_manager.wrapper._find_real_binary", return_value="codex-real"):
+                    with patch("ai_session_manager.wrapper._exec") as exec_mock:
+                        with patch("ai_session_manager.wrapper.sys.argv", ["codex", "review"]):
+                            wrapper.run("codex")
+
+            exec_mock.assert_called_once_with("codex-real", ["review"])
+            _, state_path, _ = wrapper._state_file("codex", folder_dir)
+            self.assertFalse(state_path.exists())
 
 if __name__ == "__main__":
     unittest.main()

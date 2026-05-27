@@ -5,20 +5,20 @@ Commands:
   setup     Rename the real copilot binary to copilot-real and install the wrapper.
   teardown  Restore the original copilot binary.
   status    Show current installation state.
-  reset     Delete the session file for the current git repo or folder.
+  reset     Delete the session file for the current git repo.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import shutil
 import stat
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
-
-from copilot_session.wrapper import _session_target
 
 
 IS_WINDOWS = platform.system() == "Windows"
@@ -151,28 +151,41 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_reset(args: argparse.Namespace) -> int:
-    scope_dir, session_file, scope_kind = _session_target()
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            print("ERROR: not inside a git repository.", file=sys.stderr)
+            return 1
+    except FileNotFoundError:
+        print("ERROR: git not found.", file=sys.stderr)
+        return 1
+
+    git_root = Path(result.stdout.strip())
+    session_file = git_root / ".git" / "copilot-session"
 
     if session_file.exists():
         session_file.unlink()
         print(f"Session file removed: {session_file}")
-        print(f"Next 'copilot' in this {scope_kind} will start a fresh session.")
+        print("Next 'copilot' in this repo will start a fresh session.")
     else:
-        print(f"No session file found for this {scope_kind}: {scope_dir}")
+        print("No session file found for this repo.")
     return 0
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="copilot-session",
-        description="Manage per-repo and per-folder session persistence for GitHub Copilot CLI.",
+        description="Manage per-repo session persistence for GitHub Copilot CLI.",
     )
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     sub.add_parser("setup",    help="Install the copilot wrapper")
     sub.add_parser("teardown", help="Remove the wrapper and restore the original binary")
     sub.add_parser("status",   help="Show current installation state")
-    sub.add_parser("reset",    help="Delete the session file for the current git repo or folder")
+    sub.add_parser("reset",    help="Delete the session file for the current git repo")
 
     args = parser.parse_args()
 

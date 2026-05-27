@@ -3,16 +3,17 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "copilot-session"
+name = "ai-session-manager"
 version = "0.1.0"
-description = "Per-repo and per-folder session persistence for GitHub Copilot CLI"
+description = "Per-project session persistence for AI CLI tools"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
-keywords = ["copilot", "github", "session", "cli"]
+keywords = ["ai", "cli", "session", "wrapper"]
 
 [project.scripts]
-copilot-session = "copilot_session.cli:main"
+ai-session-manager = "ai_session_manager.cli:main"
+copilot-session = "ai_session_manager.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
