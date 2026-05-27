@@ -1,4 +1,4 @@
-"""Core wrapper logic: resolve session ID for the current git repo and exec the real copilot."""
+"""Core wrapper logic: resolve session IDs for repos or folders and exec the real copilot."""
 
 from __future__ import annotations
 
@@ -10,23 +10,34 @@ import uuid
 from pathlib import Path
 
 
-SESSION_FILE = "copilot-session"  # stored inside .git/
+REPO_SESSION_FILE = "copilot-session"  # stored inside .git/
+FOLDER_SESSION_FILE = ".copilot-session"  # stored in the current non-git folder
 IS_WINDOWS = platform.system() == "Windows"
 
 
-def _git_root() -> Path | None:
+def _git_root(cwd: Path | None = None) -> Path | None:
     """Return the root of the current git repo, or None if not in one."""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
+            cwd=cwd,
         )
         if result.returncode == 0:
             return Path(result.stdout.strip())
     except FileNotFoundError:
         pass
     return None
+
+
+def _session_target(cwd: Path | None = None) -> tuple[Path, Path, str]:
+    """Return the current session scope directory, file path, and scope kind."""
+    scope_dir = (cwd or Path.cwd()).resolve()
+    git_root = _git_root(scope_dir)
+    if git_root is not None:
+        return git_root, git_root / ".git" / REPO_SESSION_FILE, "repo"
+    return scope_dir, scope_dir / FOLDER_SESSION_FILE, "folder"
 
 
 def _real_bin_name(wrapper_path: Path) -> Path:
@@ -90,19 +101,16 @@ def run() -> None:
     real = os.environ.get("COPILOT_REAL_BIN") or _find_real_copilot()
     user_args = sys.argv[1:]
 
-    git_root = _git_root()
-
-    if git_root and not _has_session_flag(user_args):
-        session_file = git_root / ".git" / SESSION_FILE
-
-        if session_file.exists():
-            session_id = session_file.read_text().strip()
-            print(f"[copilot-session] Resuming session {session_id} ({git_root.name})", flush=True)
-        else:
-            session_id = str(uuid.uuid4())
-            session_file.write_text(session_id)
-            print(f"[copilot-session] New session {session_id} ({git_root.name})", flush=True)
-
-        _exec(real, ["--session-id", session_id] + user_args)
-    else:
+    if _has_session_flag(user_args):
         _exec(real, user_args)
+
+    scope_dir, session_file, _scope_kind = _session_target()
+    if session_file.exists():
+        session_id = session_file.read_text().strip()
+        print(f"[copilot-session] Resuming session {session_id} ({scope_dir.name})", flush=True)
+    else:
+        session_id = str(uuid.uuid4())
+        session_file.write_text(session_id)
+        print(f"[copilot-session] New session {session_id} ({scope_dir.name})", flush=True)
+
+    _exec(real, ["--session-id", session_id] + user_args)

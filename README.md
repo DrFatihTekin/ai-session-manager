@@ -1,8 +1,8 @@
 # copilot-session
 
-> Per-repo session persistence for [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/use-copilot-agents/use-copilot-cli).
+> Per-repo and per-folder session persistence for [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/use-copilot-agents/use-copilot-cli).
 
-Every time you `cd` into a git repo and run `copilot`, this tool automatically resumes the last session you had in that repo — no flags, no extra steps.
+Every time you `cd` into a git repo or plain folder and run `copilot`, this tool automatically resumes the last session you had there — no flags, no extra steps.
 
 Works on **Linux**, **macOS**, and **Windows**.
 
@@ -12,7 +12,7 @@ Works on **Linux**, **macOS**, and **Windows**.
 
 By default, every `copilot` invocation starts a brand-new session. If you close your terminal and come back to a project the next day, all context is lost.
 
-`copilot-session` fixes this by storing a session UUID in `.git/copilot-session` and passing `--session-id <uuid>` to the Copilot CLI on every startup. Each git repo gets its own independent, persistent session.
+`copilot-session` fixes this by storing a session UUID in `.git/copilot-session` for git repos, or `.copilot-session` for plain folders, and passing `--session-id <uuid>` to the Copilot CLI on every startup. Each repo or folder gets its own independent, persistent session.
 
 ---
 
@@ -66,6 +66,12 @@ copilot
 cd ~/other-project
 copilot
 # [copilot-session] New session 9e8d7c6b (other-project)
+
+# Non-git folder → separate session stored in .copilot-session
+mkdir -p ~/scratch-notes
+cd ~/scratch-notes
+copilot
+# [copilot-session] New session 1a2b3c4d (scratch-notes)
 ```
 
 All flags and options you pass to `copilot` are forwarded unchanged to the real binary:
@@ -102,7 +108,7 @@ copilot -p "..."          # non-interactive prompt mode
 | `copilot-session setup` | Install the wrapper (one-time) |
 | `copilot-session teardown` | Remove the wrapper and restore the original binary |
 | `copilot-session status` | Show platform, wrapper state, and binary paths |
-| `copilot-session reset` | Delete the session file for the current repo (next run starts fresh) |
+| `copilot-session reset` | Delete the session file for the current repo or folder (next run starts fresh) |
 
 ---
 
@@ -112,13 +118,14 @@ copilot -p "..."          # non-interactive prompt mode
 copilot  (wrapper)
   │
   ├─ finds git root of cwd
-  ├─ reads/creates  .git/copilot-session  (UUID, never committed)
+  ├─ reads/creates  .git/copilot-session  when inside a git repo
+  ├─ otherwise reads/creates  .copilot-session  in the current folder
   └─ launches copilot-real --session-id <uuid> [your args]
 ```
 
-- Session files live inside `.git/` so they are never accidentally committed.
-- Each git repository has its own independent session.
-- Outside a git repo, the wrapper passes through to the real binary unchanged.
+- Git repos store session files inside `.git/` so they are never accidentally committed.
+- Plain folders store session files in `.copilot-session` in the current directory.
+- Each git repository or plain folder has its own independent session.
 - All flags and options are forwarded verbatim to the real binary.
 
 ### Platform details
