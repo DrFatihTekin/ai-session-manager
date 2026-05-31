@@ -24,6 +24,7 @@ from ai_session_manager.wrapper import (
     TOOLS,
     ToolSpec,
     _legacy_copilot_session_file,
+    _legacy_repo_state_file,
     _state_file,
 )
 
@@ -221,6 +222,11 @@ def cmd_reset(args: argparse.Namespace) -> int:
             state_path.unlink()
             removed_paths.append(state_path)
 
+        legacy_repo_state_path = _legacy_repo_state_file(tool.key)
+        if legacy_repo_state_path is not None and legacy_repo_state_path.exists():
+            legacy_repo_state_path.unlink()
+            removed_paths.append(legacy_repo_state_path)
+
         if tool.key == "copilot":
             legacy_path = _legacy_copilot_session_file()
             if legacy_path.exists():
@@ -233,9 +239,11 @@ def cmd_reset(args: argparse.Namespace) -> int:
             print(f"Next '{tool.binary_name}' in this {scope_kind} will start fresh.")
         else:
             legacy_hint = ""
+            if legacy_repo_state_path is not None:
+                legacy_hint = f" or migrated legacy {legacy_repo_state_path.name}"
             if tool.key == "copilot":
                 legacy_name = LEGACY_REPO_SESSION_FILE if scope_kind == "repo" else LEGACY_FOLDER_SESSION_FILE
-                legacy_hint = f" or legacy {legacy_name}"
+                legacy_hint = f"{legacy_hint} or legacy {legacy_name}"
             print(f"No state file found for this {scope_kind}: {scope_dir}{legacy_hint}")
 
     return 0

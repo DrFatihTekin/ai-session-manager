@@ -112,7 +112,7 @@ def _state_root(cwd: Path | None = None) -> tuple[Path, Path, str]:
     scope_dir = (cwd or Path.cwd()).resolve()
     git_root = _git_root(scope_dir)
     if git_root is not None:
-        return git_root, git_root / ".git" / STATE_DIR_NAME, "repo"
+        return git_root, git_root / f".{STATE_DIR_NAME}", "repo"
     return scope_dir, scope_dir / f".{STATE_DIR_NAME}", "folder"
 
 
@@ -120,6 +120,15 @@ def _state_file(tool_key: str, cwd: Path | None = None) -> tuple[Path, Path, str
     """Return the scope directory, tool state path, and scope kind."""
     scope_dir, state_root, scope_kind = _state_root(cwd)
     return scope_dir, state_root / f"{tool_key}.json", scope_kind
+
+
+def _legacy_repo_state_file(tool_key: str, cwd: Path | None = None) -> Path | None:
+    """Return the previous repo-only state file path, if applicable."""
+    scope_dir = (cwd or Path.cwd()).resolve()
+    git_root = _git_root(scope_dir)
+    if git_root is None:
+        return None
+    return git_root / ".git" / STATE_DIR_NAME / f"{tool_key}.json"
 
 
 def _legacy_copilot_session_file(cwd: Path | None = None) -> Path:
@@ -151,6 +160,12 @@ def _load_state(spec: ToolSpec, cwd: Path | None = None) -> dict[str, object] | 
     _, path, _ = _state_file(spec.key, cwd)
     if path.exists():
         return json.loads(path.read_text())
+
+    legacy_repo_path = _legacy_repo_state_file(spec.key, cwd)
+    if legacy_repo_path is not None and legacy_repo_path.exists():
+        payload = json.loads(legacy_repo_path.read_text())
+        _write_state(path, payload)
+        return payload
 
     if spec.key != "copilot":
         return None

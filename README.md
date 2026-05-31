@@ -24,10 +24,13 @@ Today it supports:
 
 Project-scoped state lives in:
 
-- `.git/ai-session-manager/` inside git repos
-- `.ai-session-manager/` inside plain folders
+- `.ai-session-manager/` inside the project root, whether it is a git repo or a plain folder
 
-Copilot legacy state is still recognized and migrated from:
+Existing state is still recognized and migrated from:
+
+- `.git/ai-session-manager/`
+
+Copilot legacy state is also recognized and migrated from:
 
 - `.git/copilot-session`
 - `.copilot-session`
@@ -151,15 +154,7 @@ ai-session-manager reset claude
 ## State layout
 
 ```text
-git repo:
-  .git/ai-session-manager/
-    copilot.json
-    claude.json
-    codex.json
-    gemini.json
-    agy.json
-
-plain folder:
+project root:
   .ai-session-manager/
     copilot.json
     claude.json
