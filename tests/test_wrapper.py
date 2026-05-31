@@ -23,7 +23,7 @@ class SessionTargetTests(unittest.TestCase):
             self.assertEqual(scope_dir, repo_dir.resolve())
             self.assertEqual(
                 state_file,
-                repo_dir.resolve() / ".git" / wrapper.STATE_DIR_NAME / "copilot.json",
+                repo_dir.resolve() / f".{wrapper.STATE_DIR_NAME}" / "copilot.json",
             )
 
     def test_plain_folder_uses_hidden_state_directory(self) -> None:
