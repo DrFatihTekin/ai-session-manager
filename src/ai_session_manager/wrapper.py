@@ -26,7 +26,9 @@ class ToolSpec:
     binary_name: str
     display_name: str
     session_mode: str
+    new_session_args: tuple[str, ...] = ()
     resume_args: tuple[str, ...] = ()
+    explicit_resume_args: tuple[str, ...] = ()
     bypass_flags: frozenset[str] = frozenset()
     passthrough_commands: frozenset[str] = frozenset()
 
@@ -38,16 +40,19 @@ TOOLS = {
         display_name="Antigravity CLI",
         session_mode="auto-resume",
         resume_args=("-c",),
-        bypass_flags=frozenset({"-c", "--conversation"}),
+        explicit_resume_args=("--conversation",),
+        bypass_flags=frozenset({"-c", "--continue", "--conversation"}),
         passthrough_commands=frozenset({"auth"}),
     ),
     "claude": ToolSpec(
         key="claude",
         binary_name="claude",
         display_name="Claude Code",
-        session_mode="auto-resume",
+        session_mode="managed-id",
+        new_session_args=("--session-id",),
         resume_args=("-c",),
-        bypass_flags=frozenset({"-c", "--continue", "-r", "--resume"}),
+        explicit_resume_args=("-r",),
+        bypass_flags=frozenset({"-c", "--continue", "-r", "--resume", "--session-id"}),
         passthrough_commands=frozenset({"agents", "attach", "auth", "install", "update"}),
     ),
     "codex": ToolSpec(
@@ -56,6 +61,7 @@ TOOLS = {
         display_name="Codex",
         session_mode="auto-resume",
         resume_args=("resume", "--last"),
+        explicit_resume_args=("resume",),
         passthrough_commands=frozenset(
             {"app", "debug", "exec", "mcp", "resume", "review", "sandbox"}
         ),
@@ -65,6 +71,7 @@ TOOLS = {
         binary_name="copilot",
         display_name="GitHub Copilot CLI",
         session_mode="managed-id",
+        new_session_args=("--session-id",),
         bypass_flags=frozenset(
             {"--session-id", "--resume", "--continue", "--clear", "-p", "--prompt"}
         ),
@@ -74,9 +81,13 @@ TOOLS = {
         key="gemini",
         binary_name="gemini",
         display_name="Gemini CLI",
-        session_mode="auto-resume",
+        session_mode="managed-id",
+        new_session_args=("--session-id",),
         resume_args=("--resume",),
-        bypass_flags=frozenset({"-r", "--resume", "--list-sessions", "--delete-session"}),
+        explicit_resume_args=("--resume",),
+        bypass_flags=frozenset(
+            {"-r", "--resume", "--session-file", "--session-id", "--list-sessions", "--delete-session"}
+        ),
     ),
 }
 
@@ -241,11 +252,241 @@ def _should_bypass(spec: ToolSpec, args: list[str]) -> bool:
     return first_positional in spec.passthrough_commands
 
 
-def _resume_invocation(spec: ToolSpec, state: dict[str, object], user_args: list[str]) -> list[str]:
+def _resume_invocation(
+    spec: ToolSpec,
+    state: dict[str, object],
+    user_args: list[str],
+    cwd: Path | None = None,
+) -> list[str]:
+    resume_target = state.get("resume_target")
+
+    if spec.key == "gemini" and isinstance(resume_target, str):
+        resume_path = Path(resume_target)
+        if resume_path.exists():
+            return ["--session-file", str(resume_path), *user_args]
+
+    if spec.key == "claude" and isinstance(resume_target, str):
+        if _claude_session_file(resume_target, cwd).exists():
+            return [*spec.explicit_resume_args, resume_target, *user_args]
+        print(
+            f"[ai-session-manager] Stored Claude session {resume_target} is missing; "
+            "falling back to Claude's latest-session resume."
+        )
+        return [*spec.resume_args, *user_args]
+
     if spec.session_mode == "managed-id":
         resume_target = state["resume_target"]
-        return ["--session-id", str(resume_target), *user_args]
+        if spec.explicit_resume_args:
+            return [*spec.explicit_resume_args, str(resume_target), *user_args]
+        return [*spec.new_session_args, str(resume_target), *user_args]
+
+    if spec.key == "gemini" and isinstance(resume_target, str):
+        print(
+            f"[ai-session-manager] Stored Gemini session file {resume_target} is missing; "
+            "falling back to Gemini's latest-session resume."
+        )
+
+    if spec.key in {"agy", "codex"} and isinstance(resume_target, str):
+        return [*spec.explicit_resume_args, str(resume_target), *user_args]
+
     return [*spec.resume_args, *user_args]
+
+
+def _new_session_invocation(spec: ToolSpec, state: dict[str, object], user_args: list[str]) -> list[str]:
+    resume_target = state.get("resume_target")
+    if isinstance(resume_target, str) and spec.new_session_args:
+        return [*spec.new_session_args, resume_target, *user_args]
+    return user_args
+
+
+def _claude_project_dir(cwd: Path | None = None) -> Path:
+    scope_dir = (cwd or Path.cwd()).resolve()
+    project_key = str(scope_dir).replace("\\", "-").replace("/", "-").replace(":", "-")
+    return Path.home() / ".claude" / "projects" / project_key
+
+
+def _claude_session_file(session_id: str, cwd: Path | None = None) -> Path:
+    return _claude_project_dir(cwd) / f"{session_id}.jsonl"
+
+
+def _codex_latest_session_id(cwd: Path | None = None) -> str | None:
+    sessions_root = Path.home() / ".codex" / "sessions"
+    if not sessions_root.exists():
+        return None
+
+    scope_dir = str((cwd or Path.cwd()).resolve())
+    matches: list[tuple[float, str]] = []
+    for path in sessions_root.glob("**/*.jsonl"):
+        try:
+            lines = path.read_text().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                break
+            if record.get("type") != "session_meta":
+                continue
+            payload = record.get("payload", {})
+            if not isinstance(payload, dict):
+                break
+            session_id = payload.get("id")
+            session_cwd = payload.get("cwd")
+            if (
+                isinstance(session_id, str)
+                and session_cwd == scope_dir
+                and _codex_session_in_history(session_id)
+            ):
+                matches.append((path.stat().st_mtime, session_id))
+            break
+
+    if not matches:
+        return None
+    return max(matches)[1]
+
+
+def _codex_session_in_history(session_id: str) -> bool:
+    history_path = Path.home() / ".codex" / "history.jsonl"
+    if not history_path.exists():
+        return False
+
+    try:
+        lines = history_path.read_text().splitlines()
+    except OSError:
+        return False
+
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("session_id") == session_id:
+            return True
+    return False
+
+
+def _agy_latest_conversation_id(cwd: Path | None = None) -> str | None:
+    history_path = Path.home() / ".gemini" / "antigravity-cli" / "history.jsonl"
+    if not history_path.exists():
+        return None
+
+    scope_dir = str((cwd or Path.cwd()).resolve())
+    try:
+        lines = history_path.read_text().splitlines()
+    except OSError:
+        return None
+
+    latest_display: str | None = None
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("workspace") != scope_dir:
+            continue
+        conversation_id = record.get("conversationId")
+        if isinstance(conversation_id, str) and conversation_id:
+            return conversation_id
+        display = record.get("display")
+        if isinstance(display, str) and display.strip():
+            latest_display = display.strip()
+            break
+
+    if latest_display is None:
+        return None
+
+    brain_root = Path.home() / ".gemini" / "antigravity-cli" / "brain"
+    if not brain_root.exists():
+        return None
+
+    for brain_dir in sorted(brain_root.glob("*"), key=lambda path: path.stat().st_mtime, reverse=True):
+        user_request = _agy_first_user_request(brain_dir)
+        if user_request == latest_display:
+            return brain_dir.name
+    return None
+
+
+def _agy_conversation_exists(conversation_id: str, cwd: Path | None = None) -> bool:
+    history_path = Path.home() / ".gemini" / "antigravity-cli" / "history.jsonl"
+    if not history_path.exists():
+        return False
+
+    scope_dir = str((cwd or Path.cwd()).resolve())
+    try:
+        lines = history_path.read_text().splitlines()
+    except OSError:
+        return False
+
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("workspace") != scope_dir:
+            continue
+        if record.get("conversationId") == conversation_id:
+            return True
+    return False
+
+
+def _agy_first_user_request(brain_dir: Path) -> str | None:
+    transcript = brain_dir / ".system_generated" / "logs" / "transcript_full.jsonl"
+    if not transcript.exists():
+        transcript = brain_dir / ".system_generated" / "logs" / "transcript.jsonl"
+    if not transcript.exists():
+        return None
+
+    try:
+        lines = transcript.read_text().splitlines()
+    except OSError:
+        return None
+
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("type") != "USER_INPUT":
+            continue
+        return _extract_user_request(record.get("content"))
+    return None
+
+
+def _extract_user_request(content: object) -> str | None:
+    if not isinstance(content, str):
+        return None
+    start = "<USER_REQUEST>"
+    end = "</USER_REQUEST>"
+    if start not in content or end not in content:
+        return None
+    return content.split(start, 1)[1].split(end, 1)[0].strip()
+
+
+def _discover_resume_target(spec: ToolSpec, cwd: Path | None = None) -> str | None:
+    if spec.key == "codex":
+        return _codex_latest_session_id(cwd)
+    if spec.key == "agy":
+        return _agy_latest_conversation_id(cwd)
+    return None
+
+
+def _resume_target_is_valid(spec: ToolSpec, resume_target: str, cwd: Path | None = None) -> bool:
+    if spec.key == "codex":
+        return _codex_session_in_history(resume_target)
+    if spec.key == "agy":
+        return _agy_conversation_exists(resume_target, cwd)
+    return True
 
 
 def _exec(real: str, args: list[str]) -> None:
@@ -254,6 +495,25 @@ def _exec(real: str, args: list[str]) -> None:
         result = subprocess.run([real] + args)
         sys.exit(result.returncode)
     os.execv(real, [real] + args)
+
+
+def _invoke_tool(
+    spec: ToolSpec,
+    real: str,
+    args: list[str],
+    cwd: Path,
+    state: dict[str, object] | None = None,
+) -> None:
+    if spec.key in {"agy", "codex"}:
+        result = subprocess.run([real] + args)
+        if result.returncode == 0:
+            resume_target = _discover_resume_target(spec, cwd)
+            if resume_target is not None:
+                _, state_path, _ = _state_file(spec.key, cwd)
+                _write_state(state_path, _state_payload(spec, resume_target))
+        sys.exit(result.returncode)
+
+    _exec(real, args)
 
 
 def _tool_from_invocation(tool_key: str | None) -> ToolSpec:
@@ -286,17 +546,37 @@ def run(tool_key: str | None = None) -> None:
         if spec.session_mode == "managed-id":
             session_id = str(state["resume_target"])
             print(f"[ai-session-manager] New session {session_id} ({scope_dir.name})", flush=True)
-            _exec(real, _resume_invocation(spec, state, user_args))
+            _invoke_tool(spec, real, _new_session_invocation(spec, state, user_args), scope_dir, state)
             return
 
         print(
             f"[ai-session-manager] Starting new {spec.display_name} session ({scope_dir.name})",
             flush=True,
         )
-        _exec(real, user_args)
+        _invoke_tool(spec, real, user_args, scope_dir, state)
         return
 
+    if "resume_target" not in state:
+        resume_target = _discover_resume_target(spec, scope_dir)
+        if resume_target is not None:
+            state = _state_payload(spec, resume_target)
+            _, state_path, _ = _state_file(spec.key, scope_dir)
+            _write_state(state_path, state)
+    elif spec.key in {"agy", "codex"}:
+        resume_target = str(state["resume_target"])
+        if not _resume_target_is_valid(spec, resume_target, scope_dir):
+            refreshed_target = _discover_resume_target(spec, scope_dir)
+            if refreshed_target is not None and refreshed_target != resume_target:
+                state = _state_payload(spec, refreshed_target)
+            else:
+                state = _state_payload(spec)
+            _, state_path, _ = _state_file(spec.key, scope_dir)
+            _write_state(state_path, state)
+
     if spec.session_mode == "managed-id":
+        session_id = str(state["resume_target"])
+        print(f"[ai-session-manager] Resuming session {session_id} ({scope_dir.name})", flush=True)
+    elif "resume_target" in state:
         session_id = str(state["resume_target"])
         print(f"[ai-session-manager] Resuming session {session_id} ({scope_dir.name})", flush=True)
     else:
@@ -305,5 +585,5 @@ def run(tool_key: str | None = None) -> None:
             flush=True,
         )
 
-    _exec(real, _resume_invocation(spec, state, user_args))
+    _invoke_tool(spec, real, _resume_invocation(spec, state, user_args, scope_dir), scope_dir, state)
     return

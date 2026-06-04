@@ -68,9 +68,22 @@ class SessionTargetTests(unittest.TestCase):
             exec_mock.assert_called_once_with("copilot-real", ["--session-id", session_id])
             self.assertIn("[ai-session-manager] New session", stdout.getvalue())
 
-    def test_gemini_resumes_after_first_run(self) -> None:
+    def test_gemini_uses_managed_session_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             folder_dir = Path(tmp_dir)
+            stdout = StringIO()
+
+            with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
+                with patch("ai_session_manager.wrapper._find_real_binary", return_value="gemini-real"):
+                    with patch("ai_session_manager.wrapper._exec") as exec_mock:
+                        with patch("ai_session_manager.wrapper.sys.argv", ["gemini"]):
+                            with redirect_stdout(stdout):
+                                wrapper.run("gemini")
+
+            _, state_path, _ = wrapper._state_file("gemini", folder_dir)
+            session_id = wrapper.json.loads(state_path.read_text())["resume_target"]
+            exec_mock.assert_called_once_with("gemini-real", ["--session-id", session_id])
+            self.assertIn("[ai-session-manager] New session", stdout.getvalue())
 
             with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
                 with patch("ai_session_manager.wrapper._find_real_binary", return_value="gemini-real"):
@@ -78,35 +91,253 @@ class SessionTargetTests(unittest.TestCase):
                         with patch("ai_session_manager.wrapper.sys.argv", ["gemini"]):
                             wrapper.run("gemini")
 
-            exec_mock.assert_called_once_with("gemini-real", [])
+            exec_mock.assert_called_once_with("gemini-real", ["--resume", session_id])
 
-            with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
-                with patch("ai_session_manager.wrapper._find_real_binary", return_value="gemini-real"):
-                    with patch("ai_session_manager.wrapper._exec") as exec_mock:
-                        with patch("ai_session_manager.wrapper.sys.argv", ["gemini"]):
-                            wrapper.run("gemini")
-
-            exec_mock.assert_called_once_with("gemini-real", ["--resume"])
-
-    def test_agy_resumes_after_first_run(self) -> None:
+    def test_claude_uses_managed_session_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            folder_dir = Path(tmp_dir)
+            root_dir = Path(tmp_dir)
+            folder_dir = root_dir / "project"
+            folder_dir.mkdir()
+            home_dir = root_dir / "home"
+            stdout = StringIO()
 
             with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
-                with patch("ai_session_manager.wrapper._find_real_binary", return_value="agy-real"):
-                    with patch("ai_session_manager.wrapper._exec") as exec_mock:
-                        with patch("ai_session_manager.wrapper.sys.argv", ["agy"]):
-                            wrapper.run("agy")
+                with patch("ai_session_manager.wrapper.Path.home", return_value=home_dir):
+                    with patch("ai_session_manager.wrapper._find_real_binary", return_value="claude-real"):
+                        with patch("ai_session_manager.wrapper._exec") as exec_mock:
+                            with patch("ai_session_manager.wrapper.sys.argv", ["claude"]):
+                                with redirect_stdout(stdout):
+                                    wrapper.run("claude")
 
-            exec_mock.assert_called_once_with("agy-real", [])
+            _, state_path, _ = wrapper._state_file("claude", folder_dir)
+            session_id = wrapper.json.loads(state_path.read_text())["resume_target"]
+            exec_mock.assert_called_once_with("claude-real", ["--session-id", session_id])
+            self.assertIn("[ai-session-manager] New session", stdout.getvalue())
+            with patch("ai_session_manager.wrapper.Path.home", return_value=home_dir):
+                session_file = wrapper._claude_session_file(session_id, folder_dir)
+            session_file.parent.mkdir(parents=True, exist_ok=True)
+            session_file.write_text("{}\n")
 
             with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
-                with patch("ai_session_manager.wrapper._find_real_binary", return_value="agy-real"):
-                    with patch("ai_session_manager.wrapper._exec") as exec_mock:
-                        with patch("ai_session_manager.wrapper.sys.argv", ["agy"]):
-                            wrapper.run("agy")
+                with patch("ai_session_manager.wrapper.Path.home", return_value=home_dir):
+                    with patch("ai_session_manager.wrapper._find_real_binary", return_value="claude-real"):
+                        with patch("ai_session_manager.wrapper._exec") as exec_mock:
+                            with patch("ai_session_manager.wrapper.sys.argv", ["claude"]):
+                                wrapper.run("claude")
 
-            exec_mock.assert_called_once_with("agy-real", ["-c"])
+            exec_mock.assert_called_once_with("claude-real", ["-r", session_id])
+
+    def test_agy_discovers_latest_conversation_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            folder_dir = root / "project"
+            folder_dir.mkdir()
+            home_dir = root / "home"
+            history_path = home_dir / ".gemini" / "antigravity-cli" / "history.jsonl"
+            history_path.parent.mkdir(parents=True)
+            history_path.write_text(
+                wrapper.json.dumps(
+                    {
+                        "display": "hello",
+                        "timestamp": 1,
+                        "workspace": str(folder_dir.resolve()),
+                        "conversationId": "agy-conversation-id",
+                    }
+                )
+                + "\n"
+            )
+            _, state_path, _ = wrapper._state_file("agy", folder_dir)
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text(wrapper.json.dumps(wrapper._state_payload(wrapper.get_tool("agy"))) + "\n")
+
+            with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
+                with patch("ai_session_manager.wrapper.Path.home", return_value=home_dir):
+                    with patch("ai_session_manager.wrapper._git_root", return_value=None):
+                        with patch("ai_session_manager.wrapper._find_real_binary", return_value="agy-real"):
+                            with patch("ai_session_manager.wrapper.subprocess.run") as run_mock:
+                                run_mock.return_value.returncode = 0
+                                with patch("ai_session_manager.wrapper.sys.argv", ["agy"]):
+                                    with self.assertRaises(SystemExit) as exc_info:
+                                        wrapper.run("agy")
+
+            self.assertEqual(exc_info.exception.code, 0)
+            run_mock.assert_called_once_with(["agy-real", "--conversation", "agy-conversation-id"])
+            self.assertEqual(wrapper.json.loads(state_path.read_text())["resume_target"], "agy-conversation-id")
+
+    def test_agy_falls_back_to_matching_latest_brain_when_history_lacks_conversation_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            folder_dir = root / "project"
+            folder_dir.mkdir()
+            home_dir = root / "home"
+            history_path = home_dir / ".gemini" / "antigravity-cli" / "history.jsonl"
+            history_path.parent.mkdir(parents=True)
+            history_path.write_text(
+                wrapper.json.dumps(
+                    {
+                        "display": "new agy prompt",
+                        "timestamp": 2,
+                        "workspace": str(folder_dir.resolve()),
+                    }
+                )
+                + "\n"
+            )
+            brain_dir = home_dir / ".gemini" / "antigravity-cli" / "brain" / "new-brain-id"
+            transcript = brain_dir / ".system_generated" / "logs" / "transcript_full.jsonl"
+            transcript.parent.mkdir(parents=True, exist_ok=True)
+            transcript.write_text(
+                wrapper.json.dumps(
+                    {
+                        "type": "USER_INPUT",
+                        "source": "USER_EXPLICIT",
+                        "content": "<USER_REQUEST>\nnew agy prompt\n</USER_REQUEST>",
+                    }
+                )
+                + "\n"
+            )
+            _, state_path, _ = wrapper._state_file("agy", folder_dir)
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text(wrapper.json.dumps(wrapper._state_payload(wrapper.get_tool("agy"))) + "\n")
+
+            with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
+                with patch("ai_session_manager.wrapper.Path.home", return_value=home_dir):
+                    with patch("ai_session_manager.wrapper._git_root", return_value=None):
+                        with patch("ai_session_manager.wrapper._find_real_binary", return_value="agy-real"):
+                            with patch("ai_session_manager.wrapper.subprocess.run") as run_mock:
+                                run_mock.return_value.returncode = 0
+                                with patch("ai_session_manager.wrapper.sys.argv", ["agy"]):
+                                    with self.assertRaises(SystemExit):
+                                        wrapper.run("agy")
+
+            self.assertEqual(wrapper.json.loads(state_path.read_text())["resume_target"], "new-brain-id")
+
+    def test_agy_prints_resume_id_from_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            folder_dir = root / "project"
+            folder_dir.mkdir()
+            home_dir = root / "home"
+            history_path = home_dir / ".gemini" / "antigravity-cli" / "history.jsonl"
+            history_path.parent.mkdir(parents=True)
+            history_path.write_text(
+                wrapper.json.dumps(
+                    {
+                        "display": "hello",
+                        "timestamp": 1,
+                        "workspace": str(folder_dir.resolve()),
+                        "conversationId": "agy-conversation-id",
+                    }
+                )
+                + "\n"
+            )
+            _, state_path, _ = wrapper._state_file("agy", folder_dir)
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text(
+                wrapper.json.dumps(wrapper._state_payload(wrapper.get_tool("agy"), "agy-conversation-id")) + "\n"
+            )
+            stdout = StringIO()
+
+            with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
+                with patch("ai_session_manager.wrapper.Path.home", return_value=home_dir):
+                    with patch("ai_session_manager.wrapper._git_root", return_value=None):
+                        with patch("ai_session_manager.wrapper._find_real_binary", return_value="agy-real"):
+                            with patch("ai_session_manager.wrapper.subprocess.run") as run_mock:
+                                run_mock.return_value.returncode = 0
+                                with patch("ai_session_manager.wrapper.sys.argv", ["agy"]):
+                                    with redirect_stdout(stdout):
+                                        with self.assertRaises(SystemExit):
+                                            wrapper.run("agy")
+
+            self.assertIn("[ai-session-manager] Resuming session agy-conversation-id", stdout.getvalue())
+            run_mock.assert_called_once_with(["agy-real", "--conversation", "agy-conversation-id"])
+
+    def test_codex_discovers_latest_session_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            folder_dir = root / "project"
+            folder_dir.mkdir()
+            home_dir = root / "home"
+            session_path = home_dir / ".codex" / "sessions" / "2026" / "06" / "05" / "rollout.jsonl"
+            session_path.parent.mkdir(parents=True)
+            session_path.write_text(
+                "\n".join(
+                    [
+                        wrapper.json.dumps(
+                            {
+                                "type": "session_meta",
+                                "payload": {
+                                    "id": "codex-session-id",
+                                    "cwd": str(folder_dir.resolve()),
+                                },
+                            }
+                        )
+                    ]
+                )
+                + "\n"
+            )
+            history_path = home_dir / ".codex" / "history.jsonl"
+            history_path.parent.mkdir(parents=True, exist_ok=True)
+            history_path.write_text(
+                wrapper.json.dumps({"session_id": "codex-session-id", "ts": 1, "text": "hello"}) + "\n"
+            )
+            _, state_path, _ = wrapper._state_file("codex", folder_dir)
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text(wrapper.json.dumps(wrapper._state_payload(wrapper.get_tool("codex"))) + "\n")
+
+            with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
+                with patch("ai_session_manager.wrapper.Path.home", return_value=home_dir):
+                    with patch("ai_session_manager.wrapper._git_root", return_value=None):
+                        with patch("ai_session_manager.wrapper._find_real_binary", return_value="codex-real"):
+                            with patch("ai_session_manager.wrapper.subprocess.run") as run_mock:
+                                run_mock.return_value.returncode = 0
+                                with patch("ai_session_manager.wrapper.sys.argv", ["codex"]):
+                                    with self.assertRaises(SystemExit) as exc_info:
+                                        wrapper.run("codex")
+
+            self.assertEqual(exc_info.exception.code, 0)
+            run_mock.assert_called_once_with(["codex-real", "resume", "codex-session-id"])
+            self.assertEqual(wrapper.json.loads(state_path.read_text())["resume_target"], "codex-session-id")
+
+    def test_codex_first_run_records_resume_target_after_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            folder_dir = root / "project"
+            folder_dir.mkdir()
+            home_dir = root / "home"
+            session_path = home_dir / ".codex" / "sessions" / "2026" / "06" / "05" / "rollout.jsonl"
+            session_path.parent.mkdir(parents=True)
+            session_path.write_text(
+                wrapper.json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {
+                            "id": "codex-session-id",
+                            "cwd": str(folder_dir.resolve()),
+                        },
+                    }
+                )
+                + "\n"
+            )
+            history_path = home_dir / ".codex" / "history.jsonl"
+            history_path.parent.mkdir(parents=True, exist_ok=True)
+            history_path.write_text(
+                wrapper.json.dumps({"session_id": "codex-session-id", "ts": 1, "text": "hello"}) + "\n"
+            )
+
+            with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
+                with patch("ai_session_manager.wrapper.Path.home", return_value=home_dir):
+                    with patch("ai_session_manager.wrapper._git_root", return_value=None):
+                        with patch("ai_session_manager.wrapper._find_real_binary", return_value="codex-real"):
+                            with patch("ai_session_manager.wrapper.subprocess.run") as run_mock:
+                                run_mock.return_value.returncode = 0
+                                with patch("ai_session_manager.wrapper.sys.argv", ["codex"]):
+                                    with self.assertRaises(SystemExit) as exc_info:
+                                        wrapper.run("codex")
+
+            self.assertEqual(exc_info.exception.code, 0)
+            run_mock.assert_called_once_with(["codex-real"])
+            _, state_path, _ = wrapper._state_file("codex", folder_dir)
+            self.assertEqual(wrapper.json.loads(state_path.read_text())["resume_target"], "codex-session-id")
 
     def test_codex_bypasses_explicit_subcommands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -19,11 +19,11 @@ Today it supports:
 
 | Tool | Auto-resume behavior |
 |---|---|
-| `agy` | After first run, launches `agy -c` in the same project |
+| `agy` | Starts normally on first run, then stores/discovers a native conversation ID and resumes with `agy --conversation <id>` |
 | `copilot` | Stores a stable session UUID and launches `copilot --session-id <uuid>` |
-| `claude` | After first run, launches `claude -c` in the same project |
-| `gemini` | After first run, launches `gemini --resume` in the same project |
-| `codex` | After first run, launches `codex resume --last` in the same project |
+| `claude` | Stores a managed session UUID, starts with `claude --session-id <uuid>`, then resumes with `claude -r <uuid>` |
+| `gemini` | Stores a managed session UUID, starts with `gemini --session-id <uuid>`, then resumes with `gemini --resume <uuid>` |
+| `codex` | Starts normally on first run, then stores/discovers the native session ID and resumes with `codex resume <id>` |
 
 Project-scoped state lives in:
 
@@ -93,28 +93,40 @@ copilot
 # [ai-session-manager] Resuming session 4f1a2b3c-... (my-project)
 ```
 
-### AGY / Claude / Gemini / Codex
+### AGY
 
 ```bash
 agy
 # [ai-session-manager] Starting new Antigravity CLI session (my-project)
+
 agy
-# [ai-session-manager] Resuming latest Antigravity CLI session (my-project)
+# [ai-session-manager] Resuming session 123e4567-... (my-project)
+```
+
+### Claude / Gemini
+
+```bash
+claude
+# [ai-session-manager] New session 4f1a2b3c-... (my-project)
 
 claude
-# [ai-session-manager] Starting new Claude Code session (my-project)
-claude
-# [ai-session-manager] Resuming latest Claude Code session (my-project)
+# [ai-session-manager] Resuming session 4f1a2b3c-... (my-project)
 
 gemini
-# [ai-session-manager] Starting new Gemini CLI session (my-project)
-gemini
-# [ai-session-manager] Resuming latest Gemini CLI session (my-project)
+# [ai-session-manager] New session 7b2f8c1d-... (my-project)
 
+gemini
+# [ai-session-manager] Resuming session 7b2f8c1d-... (my-project)
+```
+
+### Codex
+
+```bash
 codex
 # [ai-session-manager] Starting new Codex session (my-project)
+
 codex
-# [ai-session-manager] Resuming latest Codex session (my-project)
+# [ai-session-manager] Resuming session 019e94b3-... (my-project)
 ```
 
 Supported tools are still fully usable with their own native session commands. If you pass an explicit resume or session-management flag/subcommand, the wrapper gets out of the way.
@@ -151,6 +163,7 @@ ai-session-manager reset claude
 | `ai-session-manager teardown [tools...]` | Remove wrappers and restore original binaries |
 | `ai-session-manager status [tools...]` | Show platform, binary paths, and state files |
 | `ai-session-manager reset [tools...]` | Delete persisted wrapper state for the current project |
+| `ai-session-manager session convert --from <tool> --to <target>` | Rebuild a supported source session as a resumable session for a proven target tool |
 
 ---
 
@@ -166,7 +179,57 @@ project root:
     agy.json
 ```
 
-Copilot stores a generated UUID in its state file. The other tools use the file as an on/off marker that tells the wrapper to invoke the tool's native resume-latest behavior on future launches.
+Copilot, Claude, and Gemini store an exact managed session identifier in their state files from the first launch.
+
+AGY and Codex store the tool's own native conversation/session identifier once the wrapper can discover it from local history after a successful run. If no exact native ID is available yet, the wrapper falls back to the tool's native resume-latest/new-session behavior until it can record one.
+
+## Session migration
+
+`ai-session-manager` currently supports these proven target combinations:
+
+| From | To | Status |
+|---|---|---|
+| `copilot` | `claude` | Supported |
+| `codex` | `claude` | Supported |
+| `gemini` | `claude` | Supported |
+| `agy` | `claude` | Supported |
+| `claude` | `gemini` | Supported |
+| `copilot` | `gemini` | Supported |
+| `codex` | `gemini` | Supported |
+| `gemini` | `gemini` | Supported |
+| `agy` | `gemini` | Supported |
+
+Example:
+
+```bash
+ai-session-manager session convert --from copilot --to claude
+```
+
+```bash
+ai-session-manager session convert --from claude --to gemini --source-session <claude-session-id>
+```
+
+For `copilot`, the converter can read the current project's stored source session ID from `.ai-session-manager/copilot.json`.
+
+For `claude`, `codex`, `gemini`, and `agy`, pass the source session explicitly:
+
+```bash
+ai-session-manager session convert --from claude --to gemini --source-session <claude-session-id>
+ai-session-manager session convert --from codex --to claude --source-session <codex-session-id>
+ai-session-manager session convert --from gemini --to claude --source-session <gemini-session-id>
+ai-session-manager session convert --from agy --to claude --source-session <agy-brain-id-or-transcript-path>
+```
+
+The converter rebuilds the visible user/assistant chat history for the chosen proven target:
+
+- `claude` target sessions are written to `~/.claude/projects/...` and future `claude` launches resume them with `claude -r <session-id>`.
+- `gemini` target sessions are written to `.ai-session-manager/gemini-session-<id>.jsonl` in the project and future `gemini` launches resume them with `--session-file`.
+
+Important limits:
+
+- Only visible chat history is transferred today.
+- Source-tool calls, tool outputs, attachments, checkpoints, and other hidden internal state are not portable to other targets.
+- Unsupported tool pairs fail explicitly instead of silently degrading to a summary handoff.
 
 ### Platform details
 
@@ -206,6 +269,50 @@ ai-session-manager setup copilot
 ai-session-manager teardown
 pip uninstall ai-session-manager
 ```
+
+---
+
+## Publishing to PyPI
+
+This repository includes a GitHub Actions workflow at `.github/workflows/publish-pypi.yml`.
+
+What it does:
+
+1. runs `pytest -q`
+2. builds the package with `python -m build`
+3. checks the artifacts with `python -m twine check dist/*`
+4. publishes to PyPI
+
+### Recommended setup: PyPI trusted publishing
+
+Configure PyPI to trust this GitHub repository and workflow:
+
+- PyPI project: `ai-session-manager`
+- owner/repo: `DrFatihTekin/ai-session-manager`
+- workflow file: `publish-pypi.yml`
+- environment: `pypi`
+
+The workflow uses GitHub OIDC via `pypa/gh-action-pypi-publish`, so no PyPI API token needs to be stored in GitHub secrets once trusted publishing is configured on the PyPI side.
+
+### How to trigger a publish
+
+Two triggers are enabled:
+
+1. **Release publish**: publish a GitHub Release from a tag that points to a commit already contained in `main`
+2. **Manual dispatch**: run the workflow from the Actions tab for a revision already contained in `main`
+
+The workflow explicitly checks that the revision being published is contained in `origin/main`, so it will fail instead of publishing a feature branch by mistake.
+
+Typical release flow:
+
+```bash
+git checkout main
+git pull --ff-only origin main
+git tag v0.1.0
+git push origin main --tags
+```
+
+Then publish a GitHub Release for that tag.
 
 ---
 

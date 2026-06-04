@@ -6,6 +6,7 @@ Commands:
   teardown  Restore original tool binaries.
   status    Show installation state for supported tools.
   reset     Delete persisted wrapper state for supported tools.
+  session   Convert supported sessions between tools.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import sys
 import textwrap
 from pathlib import Path
 
+from ai_session_manager.session_convert import SessionConversionError, convert_session
 from ai_session_manager.wrapper import (
     LEGACY_FOLDER_SESSION_FILE,
     LEGACY_REPO_SESSION_FILE,
@@ -249,6 +251,34 @@ def cmd_reset(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_session_convert(args: argparse.Namespace) -> int:
+    try:
+        result = convert_session(
+            args.source_tool,
+            args.target_tool,
+            source_session=args.source_session,
+            target_session=args.target_session,
+            apply_state=not args.no_apply,
+        )
+    except SessionConversionError as exc:
+        print(f"Error: {exc}")
+        return 1
+
+    print(f"Converted {result.source_tool} session {result.source_session} -> {result.target_tool}")
+    print(f"Target session: {result.target_session}")
+    print(f"Target file   : {result.target_path}")
+    print(f"Messages      : {result.message_count}")
+    if result.applied_state_path is not None:
+        print(f"Applied state : {result.applied_state_path}")
+    else:
+        print("Applied state : skipped (--no-apply)")
+
+    for warning in result.warnings:
+        print(f"Warning       : {warning}")
+
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="ai-session-manager",
@@ -265,6 +295,25 @@ def main() -> None:
         subparser = sub.add_parser(name, help=help_text)
         subparser.add_argument("tools", nargs="*", choices=TOOL_CHOICES, help="Tools to target")
 
+    session_parser = sub.add_parser("session", help="Convert supported sessions between tools")
+    session_sub = session_parser.add_subparsers(dest="session_command", metavar="SESSION_COMMAND")
+    convert_parser = session_sub.add_parser("convert", help="Convert one supported session into another")
+    convert_parser.add_argument("--from", dest="source_tool", required=True, choices=ALL_TOOLS)
+    convert_parser.add_argument("--to", dest="target_tool", required=True, choices=ALL_TOOLS)
+    convert_parser.add_argument(
+        "--source-session",
+        help="Source session ID. Defaults to the current project's stored source-tool session.",
+    )
+    convert_parser.add_argument(
+        "--target-session",
+        help="Target session ID to create. Defaults to a new UUID.",
+    )
+    convert_parser.add_argument(
+        "--no-apply",
+        action="store_true",
+        help="Create the migrated target session without making it the default session for this project.",
+    )
+
     args = parser.parse_args()
 
     dispatch = {
@@ -272,10 +321,19 @@ def main() -> None:
         "teardown": cmd_teardown,
         "status": cmd_status,
         "reset": cmd_reset,
+        "session": cmd_session_convert,
     }
+
+    if args.command == "session" and args.session_command != "convert":
+        session_parser.print_help()
+        sys.exit(0)
 
     if args.command not in dispatch:
         parser.print_help()
         sys.exit(0)
 
     sys.exit(dispatch[args.command](args))
+
+
+if __name__ == "__main__":
+    main()
