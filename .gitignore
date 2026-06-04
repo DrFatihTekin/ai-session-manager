@@ -5,3 +5,4 @@ __pycache__/
 .venv/
 .antigravitycli/
 .ai-session-manager/
+.pytest_cache/

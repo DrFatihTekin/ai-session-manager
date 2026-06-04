@@ -8,8 +8,19 @@ version = "0.1.0"
 description = "Per-project session persistence for AI CLI tools"
 readme = "README.md"
 requires-python = ">=3.8"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 keywords = ["ai", "cli", "session", "wrapper", "copilot", "claude", "codex", "gemini"]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+]
+
+[project.urls]
+Homepage = "https://github.com/DrFatihTekin/ai-session-manager"
+Repository = "https://github.com/DrFatihTekin/ai-session-manager"
 
 [project.scripts]
 ai-session-manager = "ai_session_manager.cli:main"

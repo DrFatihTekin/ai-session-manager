@@ -6,6 +6,9 @@
 
 Works on **Linux**, **macOS**, and **Windows**.
 
+> [!WARNING]
+> This tool renames installed CLI binaries and replaces them with wrapper scripts. Use it at your own risk, and make sure you understand how to restore the original binaries with `ai-session-manager teardown`.
+
 ---
 
 ## Why
