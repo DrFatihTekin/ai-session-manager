@@ -22,7 +22,6 @@ Today it supports:
 | `agy` | Starts normally on first run, then stores/discovers a native conversation ID and resumes with `agy --conversation <id>` |
 | `copilot` | Stores a stable session UUID and launches `copilot --session-id <uuid>` |
 | `claude` | Stores a managed session UUID, starts with `claude --session-id <uuid>`, then resumes with `claude -r <uuid>` |
-| `gemini` | Stores a managed session UUID, starts with `gemini --session-id <uuid>`, then resumes with `gemini --resume <uuid>` |
 | `codex` | Starts normally on first run, then stores/discovers the native session ID and resumes with `codex resume <id>` |
 
 Project-scoped state lives in:
@@ -43,7 +42,7 @@ Copilot legacy state is also recognized and migrated from:
 ## Requirements
 
 - Python 3.8+
-- One or more supported CLIs installed: Antigravity, Copilot, Claude Code, Gemini CLI, or Codex CLI
+- One or more supported CLIs installed: Antigravity, Copilot, Claude Code, or Codex CLI
 
 ---
 
@@ -72,7 +71,7 @@ ai-session-manager setup
 Or target specific tools:
 
 ```bash
-ai-session-manager setup agy copilot claude gemini codex
+ai-session-manager setup agy copilot claude codex
 ```
 
 Each selected binary is renamed to `<tool>-real` and replaced with a thin Python wrapper. From that point on, keep using the original command name.
@@ -103,7 +102,7 @@ agy
 # [ai-session-manager] Resuming session 123e4567-... (my-project)
 ```
 
-### Claude / Gemini
+### Claude
 
 ```bash
 claude
@@ -111,12 +110,6 @@ claude
 
 claude
 # [ai-session-manager] Resuming session 4f1a2b3c-... (my-project)
-
-gemini
-# [ai-session-manager] New session 7b2f8c1d-... (my-project)
-
-gemini
-# [ai-session-manager] Resuming session 7b2f8c1d-... (my-project)
 ```
 
 ### Codex
@@ -137,7 +130,6 @@ For example:
 agy --conversation 123e4567-e89b-12d3-a456-426614174000
 copilot --resume
 claude -r my-session
-gemini --list-sessions
 codex resume --last
 ```
 
@@ -174,11 +166,10 @@ project root:
     copilot.json
     claude.json
     codex.json
-    gemini.json
     agy.json
 ```
 
-Copilot, Claude, and Gemini store an exact managed session identifier in their state files from the first launch.
+Copilot and Claude store an exact managed session identifier in their state files from the first launch.
 
 AGY and Codex store the tool's own native conversation/session identifier once the wrapper can discover it from local history after a successful run. If no exact native ID is available yet, the wrapper falls back to the tool's native resume-latest/new-session behavior until it can record one.
 

@@ -77,18 +77,6 @@ TOOLS = {
         ),
         passthrough_commands=frozenset({"update"}),
     ),
-    "gemini": ToolSpec(
-        key="gemini",
-        binary_name="gemini",
-        display_name="Gemini CLI",
-        session_mode="managed-id",
-        new_session_args=("--session-id",),
-        resume_args=("--resume",),
-        explicit_resume_args=("--resume",),
-        bypass_flags=frozenset(
-            {"-r", "--resume", "--session-file", "--session-id", "--list-sessions", "--delete-session"}
-        ),
-    ),
 }
 
 UNIVERSAL_BYPASS_FLAGS = frozenset({"-h", "--help", "-V", "--version"})
@@ -260,11 +248,6 @@ def _resume_invocation(
 ) -> list[str]:
     resume_target = state.get("resume_target")
 
-    if spec.key == "gemini" and isinstance(resume_target, str):
-        resume_path = Path(resume_target)
-        if resume_path.exists():
-            return ["--session-file", str(resume_path), *user_args]
-
     if spec.key == "claude" and isinstance(resume_target, str):
         if _claude_session_file(resume_target, cwd).exists():
             return [*spec.explicit_resume_args, resume_target, *user_args]
@@ -279,12 +262,6 @@ def _resume_invocation(
         if spec.explicit_resume_args:
             return [*spec.explicit_resume_args, str(resume_target), *user_args]
         return [*spec.new_session_args, str(resume_target), *user_args]
-
-    if spec.key == "gemini" and isinstance(resume_target, str):
-        print(
-            f"[ai-session-manager] Stored Gemini session file {resume_target} is missing; "
-            "falling back to Gemini's latest-session resume."
-        )
 
     if spec.key in {"agy", "codex"} and isinstance(resume_target, str):
         return [*spec.explicit_resume_args, str(resume_target), *user_args]

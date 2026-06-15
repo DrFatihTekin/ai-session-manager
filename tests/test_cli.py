@@ -43,21 +43,35 @@ class SetupSymlinkTests(unittest.TestCase):
             target_dir = root / "target"
             bin_dir.mkdir()
             target_dir.mkdir()
-            shim_path = bin_dir / "gemini"
+            shim_path = bin_dir / "claude"
             target_path = target_dir / "index.js"
-            target_path.write_text("console.log('gemini');\n")
+            target_path.write_text("console.log('claude');\n")
             shim_path.symlink_to(target_path)
 
             with patch("ai_session_manager.cli._find_binary", return_value=shim_path):
-                exit_code = cli.cmd_setup(Namespace(tools=["gemini"]))
+                exit_code = cli.cmd_setup(Namespace(tools=["claude"]))
 
             self.assertEqual(exit_code, 0)
             self.assertTrue(shim_path.exists())
-            self.assertTrue((bin_dir / "gemini-real").is_symlink())
-            self.assertEqual((bin_dir / "gemini-real").resolve(), target_path)
-            wrapper_path = bin_dir / "gemini"
+            self.assertTrue((bin_dir / "claude-real").is_symlink())
+            self.assertEqual((bin_dir / "claude-real").resolve(), target_path)
+            wrapper_path = bin_dir / "claude"
             self.assertTrue(wrapper_path.exists())
             self.assertIn("ai_session_manager.wrapper", wrapper_path.read_text())
+
+    def test_setup_fails_cleanly_when_wrapper_exists_but_real_binary_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            bin_dir = Path(tmp_dir)
+            wrapper_path = bin_dir / "claude"
+            wrapper_path.write_text(
+                "#!/usr/bin/env python3\nfrom ai_session_manager.wrapper import run\nrun('claude')\n"
+            )
+
+            with patch("ai_session_manager.cli._find_binary", return_value=wrapper_path):
+                exit_code = cli.cmd_setup(Namespace(tools=["claude"]))
+
+            self.assertEqual(exit_code, 1)
+            self.assertFalse((bin_dir / "claude-real").exists())
 
 
 if __name__ == "__main__":

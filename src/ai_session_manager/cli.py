@@ -180,6 +180,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
             print(f"Wrapper is at:  {wrapper}")
             continue
 
+        if wrapper_active and not real_bin.exists():
+            print(
+                f"Wrapper is active at {wrapper}, but {real_bin.name} is missing. "
+                f"Repair or reinstall '{tool.binary_name}' first."
+            )
+            if explicit:
+                exit_code = 1
+            continue
+
         if not wrapper_active and real_bin.exists():
             print(f"Detected {tool.binary_name} was reinstalled — updating {real_bin.name}.")
             binary_path.replace(real_bin)

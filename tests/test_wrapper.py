@@ -30,13 +30,13 @@ class SessionTargetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             folder_dir = Path(tmp_dir)
 
-            scope_dir, state_file, scope_kind = wrapper._state_file("gemini", folder_dir)
+            scope_dir, state_file, scope_kind = wrapper._state_file("claude", folder_dir)
 
             self.assertEqual(scope_kind, "folder")
             self.assertEqual(scope_dir, folder_dir.resolve())
             self.assertEqual(
                 state_file,
-                folder_dir.resolve() / f".{wrapper.STATE_DIR_NAME}" / "gemini.json",
+                folder_dir.resolve() / f".{wrapper.STATE_DIR_NAME}" / "claude.json",
             )
 
     def test_copilot_migrates_legacy_state_file(self) -> None:
@@ -67,31 +67,6 @@ class SessionTargetTests(unittest.TestCase):
             session_id = wrapper.json.loads(state_path.read_text())["resume_target"]
             exec_mock.assert_called_once_with("copilot-real", ["--session-id", session_id])
             self.assertIn("[ai-session-manager] New session", stdout.getvalue())
-
-    def test_gemini_uses_managed_session_id(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            folder_dir = Path(tmp_dir)
-            stdout = StringIO()
-
-            with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
-                with patch("ai_session_manager.wrapper._find_real_binary", return_value="gemini-real"):
-                    with patch("ai_session_manager.wrapper._exec") as exec_mock:
-                        with patch("ai_session_manager.wrapper.sys.argv", ["gemini"]):
-                            with redirect_stdout(stdout):
-                                wrapper.run("gemini")
-
-            _, state_path, _ = wrapper._state_file("gemini", folder_dir)
-            session_id = wrapper.json.loads(state_path.read_text())["resume_target"]
-            exec_mock.assert_called_once_with("gemini-real", ["--session-id", session_id])
-            self.assertIn("[ai-session-manager] New session", stdout.getvalue())
-
-            with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
-                with patch("ai_session_manager.wrapper._find_real_binary", return_value="gemini-real"):
-                    with patch("ai_session_manager.wrapper._exec") as exec_mock:
-                        with patch("ai_session_manager.wrapper.sys.argv", ["gemini"]):
-                            wrapper.run("gemini")
-
-            exec_mock.assert_called_once_with("gemini-real", ["--resume", session_id])
 
     def test_claude_uses_managed_session_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
