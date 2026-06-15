@@ -57,6 +57,11 @@ def _find_binary(name: str) -> Path | None:
     return Path(found) if found else None
 
 
+def _absolute_path(path: Path) -> Path:
+    """Return an absolute path without resolving symlink targets."""
+    return path if path.is_absolute() else Path.cwd() / path
+
+
 def _real_bin_path(tool: ToolSpec, binary_path: Path) -> Path:
     """Return the path where the real binary is stored alongside the wrapper."""
     if IS_WINDOWS:
@@ -165,7 +170,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             continue
 
         processed += 1
-        binary_path = binary_path.resolve()
+        binary_path = _absolute_path(binary_path)
         real_bin = _real_bin_path(tool, binary_path)
         wrapper = _wrapper_path(binary_path)
         wrapper_active = _is_wrapper(wrapper)
@@ -209,9 +214,9 @@ def cmd_teardown(args: argparse.Namespace) -> int:
             binary_path = fallback_real
 
         processed += 1
-        binary_path = binary_path.resolve()
+        binary_path = _absolute_path(binary_path)
         real_bin = _resolve_real_binary_for_teardown(
-            tool, binary_path, fallback_real.resolve() if fallback_real is not None else None
+            tool, binary_path, _absolute_path(fallback_real) if fallback_real is not None else None
         )
         if binary_path.name.startswith(f"{tool.binary_name}-real"):
             wrapper = _wrapper_path(binary_path.with_name(f"{tool.binary_name}{binary_path.suffix}"))

@@ -35,5 +35,30 @@ class TeardownWindowsTests(unittest.TestCase):
             self.assertTrue((bin_dir / "copilot.exe").exists())
 
 
+class SetupSymlinkTests(unittest.TestCase):
+    def test_setup_renames_symlink_path_not_resolved_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            bin_dir = root / "bin"
+            target_dir = root / "target"
+            bin_dir.mkdir()
+            target_dir.mkdir()
+            shim_path = bin_dir / "gemini"
+            target_path = target_dir / "index.js"
+            target_path.write_text("console.log('gemini');\n")
+            shim_path.symlink_to(target_path)
+
+            with patch("ai_session_manager.cli._find_binary", return_value=shim_path):
+                exit_code = cli.cmd_setup(Namespace(tools=["gemini"]))
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(shim_path.exists())
+            self.assertTrue((bin_dir / "gemini-real").is_symlink())
+            self.assertEqual((bin_dir / "gemini-real").resolve(), target_path)
+            wrapper_path = bin_dir / "gemini"
+            self.assertTrue(wrapper_path.exists())
+            self.assertIn("ai_session_manager.wrapper", wrapper_path.read_text())
+
+
 if __name__ == "__main__":
     unittest.main()
