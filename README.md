@@ -4,8 +4,6 @@
 
 `ai-session-manager` adds automatic project-scoped resume behavior to supported AI CLIs so you can leave a project and come back without manually reopening the right conversation.
 
-Works on **Linux**, **macOS**, and **Windows**.
-
 Tested on **Linux** and **Windows**.
 
 > [!WARNING]
