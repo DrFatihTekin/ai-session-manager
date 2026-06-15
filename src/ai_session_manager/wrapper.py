@@ -531,7 +531,11 @@ def _tool_from_invocation(tool_key: str | None) -> ToolSpec:
 def run(tool_key: str | None = None) -> None:
     """Entry point for installed tool wrappers."""
     spec = _tool_from_invocation(tool_key)
-    real = os.environ.get(REAL_BIN_ENV) or _find_real_binary(spec)
+    real_from_env = os.environ.get(REAL_BIN_ENV)
+    if real_from_env and Path(real_from_env).exists() and os.access(real_from_env, os.X_OK):
+        real = real_from_env
+    else:
+        real = _find_real_binary(spec)
     user_args = sys.argv[1:]
 
     if _should_bypass(spec, user_args):
