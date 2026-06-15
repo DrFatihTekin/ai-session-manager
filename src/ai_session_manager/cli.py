@@ -71,6 +71,55 @@ def _wrapper_path(binary_path: Path) -> Path:
     return binary_path
 
 
+def _real_bin_candidates(tool: ToolSpec, anchor_path: Path) -> list[Path]:
+    """Return possible real binary paths next to anchor_path."""
+    parent = anchor_path.parent
+    stem = f"{tool.binary_name}-real"
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+
+    suffixes = [anchor_path.suffix]
+    if IS_WINDOWS:
+        suffixes.extend([".exe", ".cmd", ".bat", ".com", ""])
+    else:
+        suffixes.append("")
+
+    for suffix in suffixes:
+        candidate = parent / f"{stem}{suffix}"
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        candidates.append(candidate)
+
+    return candidates
+
+
+def _resolve_real_binary_for_teardown(tool: ToolSpec, binary_path: Path, fallback_real: Path | None) -> Path | None:
+    """Resolve the real binary path when removing wrappers."""
+    if binary_path.name.startswith(f"{tool.binary_name}-real"):
+        return binary_path
+
+    preferred = _real_bin_path(tool, binary_path)
+    if preferred.exists():
+        return preferred
+
+    for candidate in _real_bin_candidates(tool, binary_path):
+        if candidate.exists():
+            return candidate
+
+    if fallback_real is not None and fallback_real.exists():
+        return fallback_real.resolve()
+
+    return None
+
+
+def _restored_binary_path(tool: ToolSpec, binary_path: Path, real_bin: Path) -> Path:
+    """Return where the restored binary should be moved."""
+    if binary_path.name.startswith(f"{tool.binary_name}-real"):
+        return binary_path.with_name(f"{tool.binary_name}{binary_path.suffix}")
+    return real_bin.with_name(f"{tool.binary_name}{real_bin.suffix}")
+
+
 def _is_wrapper(path: Path) -> bool:
     """Return True if the file at path is our wrapper."""
     try:
@@ -150,30 +199,30 @@ def cmd_teardown(args: argparse.Namespace) -> int:
     for tool in _resolve_tools(args.tools):
         _tool_header(tool)
         binary_path = _find_binary(tool.binary_name)
+        fallback_real = _find_binary(f"{tool.binary_name}-real")
         if binary_path is None:
-            fallback = _find_binary(f"{tool.binary_name}-real")
-            if fallback is None:
+            if fallback_real is None:
                 print(f"Skipping: neither '{tool.binary_name}' nor '{tool.binary_name}-real' found.")
                 if explicit:
                     exit_code = 1
                 continue
-            binary_path = fallback
+            binary_path = fallback_real
 
         processed += 1
         binary_path = binary_path.resolve()
+        real_bin = _resolve_real_binary_for_teardown(
+            tool, binary_path, fallback_real.resolve() if fallback_real is not None else None
+        )
         if binary_path.name.startswith(f"{tool.binary_name}-real"):
-            real_bin = binary_path
-            wrapper = _wrapper_path(binary_path.with_name(tool.binary_name + binary_path.suffix))
-            restored_binary = binary_path.with_name(tool.binary_name + binary_path.suffix)
+            wrapper = _wrapper_path(binary_path.with_name(f"{tool.binary_name}{binary_path.suffix}"))
         else:
-            restored_binary = binary_path
-            real_bin = _real_bin_path(tool, binary_path)
             wrapper = _wrapper_path(binary_path)
 
-        if not real_bin.exists():
+        if real_bin is None or not real_bin.exists():
             print("Nothing to undo: real binary not found alongside wrapper.")
             continue
 
+        restored_binary = _restored_binary_path(tool, binary_path, real_bin)
         wrapper.unlink(missing_ok=True)
         real_bin.rename(restored_binary)
         print(f"Restored {real_bin.name} -> {restored_binary.name}")
