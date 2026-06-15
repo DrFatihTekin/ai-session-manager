@@ -353,5 +353,24 @@ class SessionTargetTests(unittest.TestCase):
             _, state_path, _ = wrapper._state_file("codex", folder_dir)
             self.assertFalse(state_path.exists())
 
+    def test_stale_real_bin_env_falls_back_to_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            folder_dir = Path(tmp_dir)
+            stale_real = folder_dir / "copilot-real.cmd"
+
+            with patch.dict(
+                "ai_session_manager.wrapper.os.environ",
+                {wrapper.REAL_BIN_ENV: str(stale_real)},
+                clear=False,
+            ):
+                with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
+                    with patch("ai_session_manager.wrapper._find_real_binary", return_value="copilot-real.exe"):
+                        with patch("ai_session_manager.wrapper._should_bypass", return_value=True):
+                            with patch("ai_session_manager.wrapper._exec") as exec_mock:
+                                with patch("ai_session_manager.wrapper.sys.argv", ["copilot", "--version"]):
+                                    wrapper.run("copilot")
+
+            exec_mock.assert_called_once_with("copilot-real.exe", ["--version"])
+
 if __name__ == "__main__":
     unittest.main()
