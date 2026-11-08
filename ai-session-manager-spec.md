@@ -1,5 +1,7 @@
 # ai-session-manager: Product and Behavioral Specification
 
+> Historical specification for version 0.1.9. The current implementation uses dedicated PATH wrappers, atomic state writes, and per-tool project locks. See [README.md](README.md) for current behavior, migration, and recovery.
+
 ## 1. Purpose and specification boundary
 
 `ai-session-manager` adds automatic, project-scoped session persistence to existing AI command-line tools. After one-time setup, users continue running their familiar tool commands. A wrapper selects a session, prints a short explanation, and launches the original tool with appropriate arguments.

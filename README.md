@@ -6,8 +6,7 @@
 
 Tested on **Linux** and **Windows**.
 
-> [!WARNING]
-> This tool renames installed CLI binaries and replaces them with wrapper scripts. Use it at your own risk, and make sure you understand how to restore the original binaries with `ai-session-manager teardown`.
+Wrappers live in a dedicated directory placed before your tools in `PATH`. Setup leaves installed CLI binaries and their symlinks intact, so tools can still update normally.
 
 ---
 
@@ -74,7 +73,28 @@ Or target specific tools:
 ai-session-manager setup agy copilot claude codex
 ```
 
-Each selected binary is renamed to `<tool>-real` and replaced with a thin Python wrapper. From that point on, keep using the original command name.
+Setup prints the wrapper location and the shell command needed to activate it. On Linux and macOS, the default location is `~/.local/share/ai-session-manager/bin` (or `$XDG_DATA_HOME/ai-session-manager/bin`). Add it **before** your native tool directories in your shell profile:
+
+```bash
+export PATH="$HOME/.local/share/ai-session-manager/bin:$PATH"
+```
+
+Restart your shell, or run `hash -r` in Bash, then keep using the original tool commands. Run `ai-session-manager status` to check that the wrappers are active.
+
+On Windows, add `%LOCALAPPDATA%\ai-session-manager\bin` before the tool directories in your user `PATH` and open a new terminal. Setup prints the exact directory. Wrappers use the Python interpreter that ran setup; rerun setup if you move or replace that Python environment.
+
+Set `AI_SESSION_MANAGER_BIN_DIR` to use a different wrapper directory. Keep that setting when running setup, status, or teardown. Existing unrelated files and symlinks in that directory are never overwritten.
+
+### Migrating from a previous installation
+
+Older releases renamed native binaries to `<tool>-real`. Before installing the new wrappers, restore those binaries:
+
+```bash
+ai-session-manager teardown
+ai-session-manager setup
+```
+
+Then activate the new wrapper directory in `PATH`. Project session state is preserved. If the legacy real binary is missing, reinstall the affected native tool first. Teardown refuses to overwrite a native tool that has already been reinstalled.
 
 ---
 
@@ -152,8 +172,8 @@ ai-session-manager reset claude
 | Command | Description |
 |---|---|
 | `ai-session-manager setup [tools...]` | Install wrappers for all detected or selected tools |
-| `ai-session-manager teardown [tools...]` | Remove wrappers and restore original binaries |
-| `ai-session-manager status [tools...]` | Show platform, binary paths, and state files |
+| `ai-session-manager teardown [tools...]` | Remove dedicated wrappers, or restore legacy renamed binaries |
+| `ai-session-manager status [tools...]` | Show paths, saved session IDs, and actionable installation/state problems |
 | `ai-session-manager reset [tools...]` | Delete persisted wrapper state for the current project |
 
 ---
@@ -171,15 +191,21 @@ project root:
 
 Copilot and Claude store an exact managed session identifier in their state files from the first launch.
 
-AGY and Codex store the tool's own native conversation/session identifier once the wrapper can discover it from local history after a successful run. If no exact native ID is available yet, the wrapper falls back to the tool's native resume-latest/new-session behavior until it can record one.
+AGY and Codex store the tool's own native conversation/session identifier once the wrapper can discover it from local history after a successful run. If no exact project session can be found, they start fresh. They never automatically resume an unverified latest session. A missing Claude transcript is started with its managed session ID rather than resuming a different conversation.
+
+State is written atomically. Invalid JSON or incompatible state stops the launch with a recovery message and leaves the original file intact. Back up that file if needed, then run `ai-session-manager reset <tool>` to start fresh.
+
+Only one managed session per tool and project may run at a time. A second launch or reset reports that the session is busy. Different tools and different projects can run independently. Lock files remain in the state directory; the operating system releases the lock when its owning process exits. Native explicit session commands bypass this management, so you can still open an independent conversation intentionally.
+
+`status` is read-only and returns a nonzero exit code for detected problems, including wrappers hidden by another PATH entry, missing native tools, invalid state, and missing saved transcripts where they can be checked. Fix the reported problem and rerun `status`.
 
 ### Platform details
 
 | | Linux | macOS | Windows |
 |---|---|---|---|
-| Wrapper file | tool name (shebang script) | tool name (shebang script) | tool `.cmd` wrapper |
-| Real binary | `<tool>-real` | `<tool>-real` | `<tool>-real.exe` or `<tool>-real.cmd` |
-| Process launch | `os.execv` (true replace) | `os.execv` (true replace) | `subprocess` + exit code |
+| Wrapper file | tool name (shell script) | tool name (shell script) | tool `.cmd` wrapper |
+| Native binary | Unchanged | Unchanged | Unchanged |
+| Managed process launch | Subprocess held under a project lock | Subprocess held under a project lock | Subprocess held under a project lock |
 
 ### Project structure
 
@@ -190,6 +216,7 @@ ai-session-manager/
 └── src/
     ├── ai_session_manager/
     │   ├── wrapper.py
+    │   ├── installation.py
     │   └── cli.py
 ```
 
@@ -197,10 +224,10 @@ ai-session-manager/
 
 ## Reinstalling a tool CLI
 
-If a wrapped tool is manually reinstalled and overwrites the wrapper, run setup again:
+Native tools can be updated or reinstalled in their normal locations. Wrappers discover the current native executable through `PATH`, skipping other session-manager wrappers. If the wrapper is no longer active, inspect the PATH order:
 
 ```bash
-ai-session-manager setup copilot
+ai-session-manager status copilot
 ```
 
 ---
@@ -211,6 +238,18 @@ ai-session-manager setup copilot
 ai-session-manager teardown
 pip uninstall ai-session-manager
 ```
+
+Remove the wrapper directory from your shell profile or Windows user `PATH` if you no longer need it.
+
+## Development
+
+The test suite uses the standard library and temporary directories; it does not need installed AI CLIs:
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests -v
+```
+
+On PowerShell, set `$env:PYTHONPATH = "src"` before running the Python command. CI runs on Linux and Windows with Python 3.8 and 3.12.
 
 ## License
 

@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 import json
 import os
 import platform
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
+from ai_session_manager.installation import find_original, is_wrapper
 
 IS_WINDOWS = platform.system() == "Windows"
 STATE_DIR_NAME = "ai-session-manager"
@@ -152,17 +155,87 @@ def _state_payload(spec: ToolSpec, resume_target: str | None = None) -> dict[str
 
 def _write_state(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + "\n")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=f".{path.name}.", delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(payload, stream, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _read_state(path: Path, spec: ToolSpec) -> dict[str, object]:
+    """Reject corrupt or incompatible state without replacing the user's file."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("expected a JSON object")
+        if payload.get("version") != 1 or payload.get("tool") != spec.key:
+            raise ValueError("unsupported version or mismatched tool")
+        if payload.get("session_mode") != spec.session_mode:
+            raise ValueError("unexpected session mode")
+        target = payload.get("resume_target")
+        if target is not None and (not isinstance(target, str) or not target.strip()
+                                   or any(c in target for c in ("/", "\\", "\n", "\r", "\0"))):
+            raise ValueError("invalid session identifier")
+        if spec.session_mode == "managed-id" and target is None:
+            raise ValueError("missing session identifier")
+        return payload
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError(f"Invalid state at {path}: {exc}. Back it up, then run "
+                         f"'ai-session-manager reset {spec.key}' to start fresh.") from exc
+
+
+@contextmanager
+def _session_lock(spec: ToolSpec, cwd: Path | None = None):
+    """Keep a per-tool OS lock until the managed child exits; crashes release it."""
+    _, state_path, _ = _state_file(spec.key, cwd)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = state_path.with_suffix(".lock")
+    with lock_path.open("a+b") as stream:
+        if IS_WINDOWS:
+            import msvcrt
+            stream.seek(0, os.SEEK_END)
+            if stream.tell() == 0:
+                stream.write(b"\0")
+                stream.flush()
+            stream.seek(0)
+            try:
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise ValueError(f"Another managed {spec.binary_name} session is active in this project. "
+                                 "Close it first, or use the tool's explicit session command.") from exc
+        else:
+            import fcntl
+            try:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise ValueError(f"Another managed {spec.binary_name} session is active in this project. "
+                                 "Close it first, or use the tool's explicit session command.") from exc
+        try:
+            yield
+        finally:
+            if IS_WINDOWS:
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
 def _load_state(spec: ToolSpec, cwd: Path | None = None) -> dict[str, object] | None:
     _, path, _ = _state_file(spec.key, cwd)
     if path.exists():
-        return json.loads(path.read_text())
+        return _read_state(path, spec)
 
     legacy_repo_path = _legacy_repo_state_file(spec.key, cwd)
     if legacy_repo_path is not None and legacy_repo_path.exists():
-        payload = json.loads(legacy_repo_path.read_text())
+        payload = _read_state(legacy_repo_path, spec)
         _write_state(path, payload)
         return payload
 
@@ -198,26 +271,23 @@ def _real_bin_name(spec: ToolSpec, wrapper_path: Path) -> Path:
 
 
 def _find_real_binary(spec: ToolSpec) -> str:
-    """
-    Find the real tool binary by checking a sibling '<tool>-real' first, then PATH.
-    """
-    script_path = Path(sys.argv[0]).resolve()
+    """Prefer a native PATH executable, falling back to legacy renamed binaries."""
+    original = find_original(spec.binary_name)
+    if original is not None:
+        return str(original)
+    script_path = Path(sys.argv[0]).absolute()
     sibling = _real_bin_name(spec, script_path)
-    if sibling.exists() and os.access(sibling, os.X_OK):
+    if sibling.exists() and os.access(sibling, os.X_OK) and not is_wrapper(sibling):
         return str(sibling)
 
-    candidates = [f"{spec.binary_name}-real.exe", f"{spec.binary_name}-real"]
-    if not IS_WINDOWS:
-        candidates = [f"{spec.binary_name}-real"]
-
-    for directory in os.environ.get("PATH", "").split(os.pathsep):
-        for name in candidates:
-            candidate = Path(directory) / name
-            if candidate.exists() and os.access(candidate, os.X_OK):
-                return str(candidate)
+    legacy = find_original(f"{spec.binary_name}-real")
+    if legacy is not None:
+        return str(legacy)
 
     raise FileNotFoundError(
-        f"Cannot find '{spec.binary_name}-real'. Run 'ai-session-manager setup {spec.key}' first."
+        f"Cannot find native '{spec.binary_name}' in PATH. Install the tool or restore a legacy "
+        f"installation with 'ai-session-manager teardown {spec.key}', then run "
+        f"'ai-session-manager setup {spec.key}'."
     )
 
 
@@ -253,9 +323,10 @@ def _resume_invocation(
             return [*spec.explicit_resume_args, resume_target, *user_args]
         print(
             f"[ai-session-manager] Stored Claude session {resume_target} is missing; "
-            "falling back to Claude's latest-session resume."
+            "starting it with the managed session identifier.",
+            file=sys.stderr,
         )
-        return [*spec.resume_args, *user_args]
+        return [*spec.new_session_args, resume_target, *user_args]
 
     if spec.session_mode == "managed-id":
         resume_target = state["resume_target"]
@@ -266,7 +337,8 @@ def _resume_invocation(
     if spec.key in {"agy", "codex"} and isinstance(resume_target, str):
         return [*spec.explicit_resume_args, str(resume_target), *user_args]
 
-    return [*spec.resume_args, *user_args]
+    # Without an exact project session, start fresh rather than resume another project's latest.
+    return user_args
 
 
 def _new_session_invocation(spec: ToolSpec, state: dict[str, object], user_args: list[str]) -> list[str]:
@@ -286,65 +358,52 @@ def _claude_session_file(session_id: str, cwd: Path | None = None) -> Path:
     return _claude_project_dir(cwd) / f"{session_id}.jsonl"
 
 
-def _codex_latest_session_id(cwd: Path | None = None) -> str | None:
-    sessions_root = Path.home() / ".codex" / "sessions"
-    if not sessions_root.exists():
-        return None
+def _json_records(path: Path):
+    """Stream dictionary records, ignoring incomplete or malformed history entries."""
+    try:
+        with path.open(encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(record, dict):
+                    yield record
+    except OSError:
+        return
 
-    scope_dir = str((cwd or Path.cwd()).resolve())
-    matches: list[tuple[float, str]] = []
+
+def _matches_project(record_cwd: object, cwd: Path | None = None) -> bool:
+    if not isinstance(record_cwd, str) or not record_cwd:
+        return False
+    scope_dir, _, scope_kind = _state_root(cwd)
+    candidate = Path(record_cwd).resolve()
+    if candidate == scope_dir:
+        return True
+    return (scope_kind == "repo" and scope_dir in candidate.parents
+            and _git_root(candidate) == scope_dir)
+
+
+def _codex_project_sessions(cwd: Path | None = None):
+    sessions_root = Path.home() / ".codex" / "sessions"
     for path in sessions_root.glob("**/*.jsonl"):
-        try:
-            lines = path.read_text().splitlines()
-        except OSError:
-            continue
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                break
+        for record in _json_records(path):
             if record.get("type") != "session_meta":
                 continue
-            payload = record.get("payload", {})
-            if not isinstance(payload, dict):
-                break
-            session_id = payload.get("id")
-            session_cwd = payload.get("cwd")
-            if (
-                isinstance(session_id, str)
-                and session_cwd == scope_dir
-                and _codex_session_in_history(session_id)
-            ):
-                matches.append((path.stat().st_mtime, session_id))
+            payload = record.get("payload")
+            if isinstance(payload, dict):
+                session_id = payload.get("id")
+                if isinstance(session_id, str) and session_id and _matches_project(payload.get("cwd"), cwd):
+                    try:
+                        yield path.stat().st_mtime, session_id
+                    except OSError:
+                        pass
             break
 
-    if not matches:
-        return None
-    return max(matches)[1]
 
-
-def _codex_session_in_history(session_id: str) -> bool:
-    history_path = Path.home() / ".codex" / "history.jsonl"
-    if not history_path.exists():
-        return False
-
-    try:
-        lines = history_path.read_text().splitlines()
-    except OSError:
-        return False
-
-    for line in lines:
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if record.get("session_id") == session_id:
-            return True
-    return False
+def _codex_latest_session_id(cwd: Path | None = None) -> str | None:
+    latest = max(_codex_project_sessions(cwd), default=None)
+    return latest[1] if latest is not None else None
 
 
 def _agy_latest_conversation_id(cwd: Path | None = None) -> str | None:
@@ -352,7 +411,6 @@ def _agy_latest_conversation_id(cwd: Path | None = None) -> str | None:
     if not history_path.exists():
         return None
 
-    scope_dir = str((cwd or Path.cwd()).resolve())
     try:
         lines = history_path.read_text().splitlines()
     except OSError:
@@ -366,7 +424,9 @@ def _agy_latest_conversation_id(cwd: Path | None = None) -> str | None:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if record.get("workspace") != scope_dir:
+        if not isinstance(record, dict):
+            continue
+        if not _matches_project(record.get("workspace"), cwd):
             continue
         conversation_id = record.get("conversationId")
         if isinstance(conversation_id, str) and conversation_id:
@@ -395,7 +455,6 @@ def _agy_conversation_exists(conversation_id: str, cwd: Path | None = None) -> b
     if not history_path.exists():
         return False
 
-    scope_dir = str((cwd or Path.cwd()).resolve())
     try:
         lines = history_path.read_text().splitlines()
     except OSError:
@@ -408,7 +467,9 @@ def _agy_conversation_exists(conversation_id: str, cwd: Path | None = None) -> b
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if record.get("workspace") != scope_dir:
+        if not isinstance(record, dict):
+            continue
+        if not _matches_project(record.get("workspace"), cwd):
             continue
         if record.get("conversationId") == conversation_id:
             return True
@@ -433,6 +494,8 @@ def _agy_first_user_request(brain_dir: Path) -> str | None:
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
             continue
         if record.get("type") != "USER_INPUT":
             continue
@@ -460,7 +523,7 @@ def _discover_resume_target(spec: ToolSpec, cwd: Path | None = None) -> str | No
 
 def _resume_target_is_valid(spec: ToolSpec, resume_target: str, cwd: Path | None = None) -> bool:
     if spec.key == "codex":
-        return _codex_session_in_history(resume_target)
+        return any(session_id == resume_target for _, session_id in _codex_project_sessions(cwd))
     if spec.key == "agy":
         return _agy_conversation_exists(resume_target, cwd)
     return True
@@ -481,16 +544,14 @@ def _invoke_tool(
     cwd: Path,
     state: dict[str, object] | None = None,
 ) -> None:
+    result = subprocess.run([real] + args)
     if spec.key in {"agy", "codex"}:
-        result = subprocess.run([real] + args)
         if result.returncode == 0:
             resume_target = _discover_resume_target(spec, cwd)
             if resume_target is not None:
                 _, state_path, _ = _state_file(spec.key, cwd)
                 _write_state(state_path, _state_payload(spec, resume_target))
-        sys.exit(result.returncode)
-
-    _exec(real, args)
+    sys.exit(result.returncode if result.returncode >= 0 else 128 - result.returncode)
 
 
 def _tool_from_invocation(tool_key: str | None) -> ToolSpec:
@@ -506,10 +567,21 @@ def _tool_from_invocation(tool_key: str | None) -> ToolSpec:
 
 
 def run(tool_key: str | None = None) -> None:
+    try:
+        _run(tool_key)
+    except (OSError, ValueError) as exc:
+        print(f"[ai-session-manager] {exc}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        sys.exit(130)
+
+
+def _run(tool_key: str | None = None) -> None:
     """Entry point for installed tool wrappers."""
     spec = _tool_from_invocation(tool_key)
     real_from_env = os.environ.get(REAL_BIN_ENV)
-    if real_from_env and Path(real_from_env).exists() and os.access(real_from_env, os.X_OK):
+    if (real_from_env and Path(real_from_env).exists() and os.access(real_from_env, os.X_OK)
+            and not is_wrapper(Path(real_from_env))):
         real = real_from_env
     else:
         real = _find_real_binary(spec)
@@ -520,6 +592,11 @@ def run(tool_key: str | None = None) -> None:
         return
 
     scope_dir, _, _scope_kind = _state_file(spec.key)
+    with _session_lock(spec, scope_dir):
+        _run_session(spec, real, user_args, scope_dir)
+
+
+def _run_session(spec: ToolSpec, real: str, user_args: list[str], scope_dir: Path) -> None:
     state = _load_state(spec)
 
     if state is None:
@@ -562,7 +639,7 @@ def run(tool_key: str | None = None) -> None:
         print(f"[ai-session-manager] Resuming session {session_id} ({scope_dir.name})", flush=True)
     else:
         print(
-            f"[ai-session-manager] Resuming latest {spec.display_name} session ({scope_dir.name})",
+            f"[ai-session-manager] No exact {spec.display_name} session found; starting fresh ({scope_dir.name})",
             flush=True,
         )
 

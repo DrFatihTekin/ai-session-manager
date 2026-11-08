@@ -58,14 +58,14 @@ class SessionTargetTests(unittest.TestCase):
 
             with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
                 with patch("ai_session_manager.wrapper._find_real_binary", return_value="copilot-real"):
-                    with patch("ai_session_manager.wrapper._exec") as exec_mock:
+                    with patch("ai_session_manager.wrapper._invoke_tool") as exec_mock:
                         with patch("ai_session_manager.wrapper.sys.argv", ["copilot"]):
                             with redirect_stdout(stdout):
                                 wrapper.run("copilot")
 
             _, state_path, _ = wrapper._state_file("copilot", folder_dir)
             session_id = wrapper.json.loads(state_path.read_text())["resume_target"]
-            exec_mock.assert_called_once_with("copilot-real", ["--session-id", session_id])
+            self.assertEqual(exec_mock.call_args.args[1:3], ("copilot-real", ["--session-id", session_id]))
             self.assertIn("[ai-session-manager] New session", stdout.getvalue())
 
     def test_claude_uses_managed_session_id(self) -> None:
@@ -79,14 +79,14 @@ class SessionTargetTests(unittest.TestCase):
             with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
                 with patch("ai_session_manager.wrapper.Path.home", return_value=home_dir):
                     with patch("ai_session_manager.wrapper._find_real_binary", return_value="claude-real"):
-                        with patch("ai_session_manager.wrapper._exec") as exec_mock:
+                        with patch("ai_session_manager.wrapper._invoke_tool") as exec_mock:
                             with patch("ai_session_manager.wrapper.sys.argv", ["claude"]):
                                 with redirect_stdout(stdout):
                                     wrapper.run("claude")
 
             _, state_path, _ = wrapper._state_file("claude", folder_dir)
             session_id = wrapper.json.loads(state_path.read_text())["resume_target"]
-            exec_mock.assert_called_once_with("claude-real", ["--session-id", session_id])
+            self.assertEqual(exec_mock.call_args.args[1:3], ("claude-real", ["--session-id", session_id]))
             self.assertIn("[ai-session-manager] New session", stdout.getvalue())
             with patch("ai_session_manager.wrapper.Path.home", return_value=home_dir):
                 session_file = wrapper._claude_session_file(session_id, folder_dir)
@@ -96,11 +96,11 @@ class SessionTargetTests(unittest.TestCase):
             with patch("ai_session_manager.wrapper.Path.cwd", return_value=folder_dir):
                 with patch("ai_session_manager.wrapper.Path.home", return_value=home_dir):
                     with patch("ai_session_manager.wrapper._find_real_binary", return_value="claude-real"):
-                        with patch("ai_session_manager.wrapper._exec") as exec_mock:
+                        with patch("ai_session_manager.wrapper._invoke_tool") as exec_mock:
                             with patch("ai_session_manager.wrapper.sys.argv", ["claude"]):
                                 wrapper.run("claude")
 
-            exec_mock.assert_called_once_with("claude-real", ["-r", session_id])
+            self.assertEqual(exec_mock.call_args.args[1:3], ("claude-real", ["-r", session_id]))
 
     def test_agy_discovers_latest_conversation_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
