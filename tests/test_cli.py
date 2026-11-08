@@ -14,6 +14,30 @@ from unittest.mock import patch
 from ai_session_manager import cli
 
 
+class VersionTests(unittest.TestCase):
+    def test_version_reports_installed_metadata_and_exits_successfully(self) -> None:
+        output = StringIO()
+        with patch.object(cli, "package_version", return_value="9.8.7") as metadata:
+            with patch.object(sys, "argv", ["ai-session-manager", "--version"]):
+                with redirect_stdout(output):
+                    with self.assertRaises(SystemExit) as result:
+                        cli.main()
+        self.assertEqual(result.exception.code, 0)
+        self.assertEqual(output.getvalue().strip(), "ai-session-manager 9.8.7")
+        metadata.assert_called_once_with("ai-session-manager")
+
+    def test_version_handles_source_checkout_without_installed_metadata(self) -> None:
+        output = StringIO()
+        with patch.object(cli, "package_version", side_effect=cli.PackageNotFoundError):
+            with patch.object(sys, "argv", ["ai-session-manager", "--version"]):
+                with redirect_stdout(output):
+                    with self.assertRaises(SystemExit) as result:
+                        cli.main()
+        self.assertEqual(result.exception.code, 0)
+        self.assertEqual(output.getvalue().strip(),
+                         "ai-session-manager unknown (package metadata unavailable)")
+
+
 class IsolatedCLI(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()

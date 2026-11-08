@@ -171,6 +171,7 @@ ai-session-manager reset claude
 
 | Command | Description |
 |---|---|
+| `ai-session-manager --version` | Show the installed package version |
 | `ai-session-manager setup [tools...]` | Install wrappers for all detected or selected tools |
 | `ai-session-manager teardown [tools...]` | Remove dedicated wrappers, or restore legacy renamed binaries |
 | `ai-session-manager status [tools...]` | Show paths, saved session IDs, and actionable installation/state problems |

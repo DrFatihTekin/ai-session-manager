@@ -17,6 +17,7 @@ import shutil
 import sys
 import tempfile
 import textwrap
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 
 from ai_session_manager.installation import find_original, is_wrapper, wrapper_directory
@@ -381,10 +382,23 @@ def _reset_tool(tool: ToolSpec) -> None:
         print(f"No state file found for this {scope_kind}: {scope_dir}{legacy_hint}")
 
 
+def _installed_version() -> str:
+    try:
+        return package_version("ai-session-manager")
+    except PackageNotFoundError:
+        return "unknown (package metadata unavailable)"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="ai-session-manager",
         description="Manage per-project session persistence for AI CLI tools.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {_installed_version()}",
+        help="Show the installed package version and exit",
     )
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
